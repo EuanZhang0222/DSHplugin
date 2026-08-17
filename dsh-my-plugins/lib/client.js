@@ -19,6 +19,48 @@ window.__ModuleLoader__.load({
     // 「我的插件」面板消费的子 slot：其余插件把它们的设置页注册到这里。
     // 未安装本插件时，其余插件会回退到 settings.section（见各自 client.js）。
     const SECTION = "my-plugins.section";
+    const SIZE_STORAGE_KEY = "dsh-my-plugins.panel-size.v1";
+    const MIN_PANEL_WIDTH = 360;
+    const MIN_PANEL_HEIGHT = 240;
+    const VIEWPORT_GAP = 24;
+
+    function defaultPanelSize() {
+      return {
+        w: Math.round(window.innerWidth * 0.88),
+        h: Math.round(window.innerHeight * 0.8),
+      };
+    }
+
+    function clampPanelSize(value) {
+      const fallback = defaultPanelSize();
+      const maxW = Math.max(280, window.innerWidth - VIEWPORT_GAP);
+      const maxH = Math.max(200, window.innerHeight - VIEWPORT_GAP);
+      const minW = Math.min(MIN_PANEL_WIDTH, maxW);
+      const minH = Math.min(MIN_PANEL_HEIGHT, maxH);
+      const rawW = Number(value?.w);
+      const rawH = Number(value?.h);
+      return {
+        w: Math.max(minW, Math.min(maxW, Number.isFinite(rawW) && rawW > 0 ? rawW : fallback.w)),
+        h: Math.max(minH, Math.min(maxH, Number.isFinite(rawH) && rawH > 0 ? rawH : fallback.h)),
+      };
+    }
+
+    function readStoredSize() {
+      try {
+        const raw = globalThis.localStorage?.getItem(SIZE_STORAGE_KEY);
+        return raw ? clampPanelSize(JSON.parse(raw)) : { w: 0, h: 0 };
+      } catch {
+        return { w: 0, h: 0 };
+      }
+    }
+
+    function storeSize(value) {
+      try {
+        globalThis.localStorage?.setItem(SIZE_STORAGE_KEY, JSON.stringify({ w: Math.round(value.w), h: Math.round(value.h) }));
+      } catch {
+        // 浏览器禁用本地存储时仍允许正常使用，只是不记忆尺寸。
+      }
+    }
 
     // -------------------------------------------------------------------------
     // 样式（内联；颜色走 DSW 主题令牌，与设置面板一致）
@@ -82,8 +124,8 @@ window.__ModuleLoader__.load({
         display: "flex",
         maxWidth: "calc(100vw - 24px)",
         maxHeight: "calc(100vh - 24px)",
-        minWidth: 360,
-        minHeight: 240,
+        minWidth: "min(360px, calc(100vw - 24px))",
+        minHeight: "min(240px, calc(100vh - 24px))",
         borderRadius: 24,
         overflow: "hidden",
         background: "var(--dsw-alias-bg-layer-2)",
@@ -102,6 +144,7 @@ window.__ModuleLoader__.load({
         padding: "22px 12px 0",
         boxSizing: "border-box",
       },
+      navCompact: { width: "100%", padding: "12px 12px 6px", gap: 8 },
       navTitle: {
         padding: "0 12px",
         fontSize: 16,
@@ -110,6 +153,7 @@ window.__ModuleLoader__.load({
         color: "var(--dsw-alias-label-primary)",
       },
       navList: { display: "flex", flexDirection: "column", gap: 4, overflowY: "auto" },
+      navListCompact: { flexDirection: "row", overflowX: "auto", overflowY: "hidden", paddingBottom: 2 },
       navCell: {
         display: "flex",
         alignItems: "center",
@@ -130,10 +174,11 @@ window.__ModuleLoader__.load({
       },
       navCellHover: { background: "var(--dsw-specific-sidebar-nav-item-hover)" },
       navCellActive: { background: "var(--dsw-specific-sidebar-nav-item-active)" },
+      navCellCompact: { flex: "0 0 auto", minWidth: 104, justifyContent: "center", padding: "8px 12px" },
       navLabel: { flex: 1, minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" },
 
       // 右侧内容列。
-      content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
+      content: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" },
       header: {
         flex: "none",
         display: "flex",
@@ -157,7 +202,7 @@ window.__ModuleLoader__.load({
         cursor: "pointer",
         color: "var(--dsw-alias-label-primary)",
       },
-      options: { flex: 1, minHeight: 0, padding: "0 24px 24px", overflowY: "auto" },
+      options: { flex: 1, minWidth: 0, minHeight: 0, width: "100%", padding: "0 24px 24px", overflow: "auto", boxSizing: "border-box" },
       empty: {
         display: "flex",
         alignItems: "center",
@@ -182,6 +227,7 @@ window.__ModuleLoader__.load({
         padding: "0 3px 3px 0",
         boxSizing: "border-box",
         color: "var(--dsw-alias-label-tertiary, #8b949e)",
+        touchAction: "none",
       },
     };
 
@@ -251,8 +297,11 @@ window.__ModuleLoader__.load({
       const [activeId, setActiveId] = useState(undefined);
       const [hover, setHover] = useState(false);
       const [navHover, setNavHover] = useState({});
-      const [box, setBox] = useState({ w: 0, h: 0 });
+      const [box, setBox] = useState(readStoredSize);
       const dragRef = useRef(null);
+      const boxRef = useRef(box);
+      const triggerRef = useRef(null);
+      const closeRef = useRef(null);
 
       const sections = useSyncExternalStore(
         sectionsStore.subscribe,
@@ -260,15 +309,23 @@ window.__ModuleLoader__.load({
         sectionsStore.getSnapshot,
       );
 
-      // 首次打开时确定默认尺寸：约 80% 视口。
+      // 首次打开读取上次尺寸；视口改变时把尺寸限制在当前屏幕内。
       useEffect(() => {
         if (!open) return;
-        if (box.w === 0 || box.h === 0) {
-          setBox({
-            w: Math.round(window.innerWidth * 0.88),
-            h: Math.round(window.innerHeight * 0.8),
+        const fit = () => {
+          setBox((current) => {
+            const next = clampPanelSize(current.w > 0 && current.h > 0 ? current : defaultPanelSize());
+            boxRef.current = next;
+            return next;
           });
-        }
+        };
+        fit();
+        window.addEventListener("resize", fit);
+        const focusTimer = setTimeout(() => closeRef.current?.focus(), 0);
+        return () => {
+          clearTimeout(focusTimer);
+          window.removeEventListener("resize", fit);
+        };
       }, [open]);
 
       // 拖拽调整大小。
@@ -277,16 +334,19 @@ window.__ModuleLoader__.load({
         const onMove = (e) => {
           const d = dragRef.current;
           if (!d) return;
-          const w = Math.max(360, Math.min(window.innerWidth - 24, d.w0 + e.clientX - d.x0));
-          const hgt = Math.max(240, Math.min(window.innerHeight - 24, d.h0 + e.clientY - d.y0));
-          setBox({ w, h: hgt });
+          const next = clampPanelSize({ w: d.w0 + e.clientX - d.x0, h: d.h0 + e.clientY - d.y0 });
+          boxRef.current = next;
+          setBox(next);
         };
-        const onUp = () => { dragRef.current = null; };
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
+        const onUp = () => {
+          if (dragRef.current) storeSize(boxRef.current);
+          dragRef.current = null;
+        };
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
         return () => {
-          document.removeEventListener("mousemove", onMove);
-          document.removeEventListener("mouseup", onUp);
+          document.removeEventListener("pointermove", onMove);
+          document.removeEventListener("pointerup", onUp);
         };
       }, [open]);
 
@@ -296,30 +356,54 @@ window.__ModuleLoader__.load({
         dragRef.current = {
           x0: e.clientX,
           y0: e.clientY,
-          w0: box.w || Math.round(window.innerWidth * 0.88),
-          h0: box.h || Math.round(window.innerHeight * 0.8),
+          w0: boxRef.current.w || Math.round(window.innerWidth * 0.88),
+          h0: boxRef.current.h || Math.round(window.innerHeight * 0.8),
         };
+      };
+
+      const resizeByKeyboard = (e) => {
+        const delta = e.shiftKey ? 50 : 20;
+        let dw = 0;
+        let dh = 0;
+        if (e.key === "ArrowRight") dw = delta;
+        else if (e.key === "ArrowLeft") dw = -delta;
+        else if (e.key === "ArrowDown") dh = delta;
+        else if (e.key === "ArrowUp") dh = -delta;
+        else return;
+        e.preventDefault();
+        const next = clampPanelSize({ w: boxRef.current.w + dw, h: boxRef.current.h + dh });
+        boxRef.current = next;
+        setBox(next);
+        storeSize(next);
       };
 
       // Escape 关闭。
       useEffect(() => {
         if (!open) return;
-        const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+        const onKey = (e) => { if (e.key === "Escape") close(); };
         document.addEventListener("keydown", onKey);
         return () => document.removeEventListener("keydown", onKey);
       }, [open]);
 
-      const close = () => { setOpen(false); setActiveId(undefined); };
+      const close = () => {
+        storeSize(boxRef.current);
+        setOpen(false);
+        setActiveId(undefined);
+        setTimeout(() => triggerRef.current?.focus(), 0);
+      };
 
       // 选中的 section：activeId 失效时回退到第一个。
       const active = (sections.find((s) => s.id === activeId) || sections[0])?.id;
 
-      const w = box.w || Math.round(window.innerWidth * 0.88);
-      const hgt = box.h || Math.round(window.innerHeight * 0.8);
+      const fittedBox = clampPanelSize(box.w > 0 && box.h > 0 ? box : defaultPanelSize());
+      const w = fittedBox.w;
+      const hgt = fittedBox.h;
+      const compact = w < 720;
 
       return h("div", { style: S.layer },
         h("button", {
           type: "button",
+          ref: triggerRef,
           style: {
             ...S.trigger,
             ...(wide ? {} : S.triggerRail),
@@ -341,11 +425,11 @@ window.__ModuleLoader__.load({
             role: "dialog",
             "aria-modal": "true",
             "aria-label": "我的插件",
-            style: { ...S.panel, width: w, height: hgt },
+            style: { ...S.panel, width: w, height: hgt, flexDirection: compact ? "column" : "row" },
           },
-            h("nav", { style: S.nav },
+            h("nav", { style: { ...S.nav, ...(compact ? S.navCompact : {}) }, "aria-label": "插件分类" },
               h("div", { style: S.navTitle }, "我的插件"),
-              h("div", { style: S.navList },
+              h("div", { style: { ...S.navList, ...(compact ? S.navListCompact : {}) } },
                 sections.length === 0
                   ? h("div", { style: { padding: "0 12px", fontSize: 13, color: "var(--dsw-alias-label-secondary, #57606a)" } }, "暂无插件")
                   : sections.map((row) => h("button", {
@@ -353,6 +437,7 @@ window.__ModuleLoader__.load({
                     type: "button",
                     style: {
                       ...S.navCell,
+                      ...(compact ? S.navCellCompact : {}),
                       ...(row.id === active ? S.navCellActive : {}),
                       ...(row.id !== active && navHover[row.id] ? S.navCellHover : {}),
                     },
@@ -366,11 +451,11 @@ window.__ModuleLoader__.load({
             h("div", { style: S.content },
               h("div", { style: S.header },
                 h("div", { style: { flex: 1 } }),
-                h("button", { type: "button", style: S.close, "aria-label": "关闭", onClick: close },
+                h("button", { type: "button", ref: closeRef, style: S.close, "aria-label": "关闭", onClick: close },
                   h(CloseIcon, { size: 14 }),
                 ),
               ),
-              h("div", { style: S.options },
+              h("div", { style: { ...S.options, padding: compact ? "0 12px 12px" : S.options.padding } },
                 active !== undefined
                   ? renderSlot(SECTION, { close }, { only: active })
                   : h("div", { style: S.empty }, "安装插件后，它们的设置页会出现在这里。"),
@@ -379,7 +464,12 @@ window.__ModuleLoader__.load({
             h("div", {
               style: S.resizeHandle,
               title: "拖拽调整大小",
-              onMouseDown: beginResize,
+              role: "separator",
+              tabIndex: 0,
+              "aria-label": "调整弹窗大小；方向键微调，按住 Shift 加速",
+              "aria-orientation": "horizontal",
+              onPointerDown: beginResize,
+              onKeyDown: resizeByKeyboard,
             },
               h("svg", { width: 12, height: 12, viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: 1.5, "aria-hidden": "true" },
                 h("path", { d: "M10 2 L2 10 M10 6 L6 10 M10 10 L10 10", strokeLinecap: "round" }),

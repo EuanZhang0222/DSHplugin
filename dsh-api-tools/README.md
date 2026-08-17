@@ -17,11 +17,26 @@ HTTP API 配置成 **Agent 可调用的工具**——Agent 在合适的时候按
 - 草稿测试：不保存即可真实调用，返回状态码、耗时、响应体（响应体 256 KB 上限、60 秒超时）；
 - 每个「已启用」配置注册成一个有明确参数的独立 Agent 工具；配置变更（保存 / 删除 /
   启用切换）后自动热更新工具集，无需重启。
+- 支持勾选部分或全部 API 工具，导出为 `.dshconfig.json` 配置包，并在另一套已安装本插件的
+  DSH 环境中批量导入；冲突时可选择「跳过已有项 / 覆盖已有项 / 创建导入副本」。
+- 配置包只包含凭据引用名，不包含真实 API Key（接口密钥）、Token（令牌）或 Basic Auth
+  （基础认证）密码；导入后按页面提示在目标环境补齐所需凭据。
+
+## 批量迁移
+
+1. 在列表中勾选要迁移的 API 工具，也可使用「选择全部当前结果」。
+2. 点击「导出选中」，浏览器会下载 `dsh-api-tools-*.dshconfig.json`。
+3. 在目标 DSH 环境打开同一页面，先选择「导入冲突」策略，再点击「导入配置」。
+4. 导入完成后核对汇总结果，并在目标环境配置提示列出的凭据引用。
+
+配置包使用统一的 `dsh-plugin-config`（DSH 插件配置）格式，当前 `formatVersion`（格式版本）
+为 `1`。插件会校验文件类型、插件标识、格式版本、条目数量和单文件大小，不会静默覆盖已有项。
 
 ## 架构
 
 - **host 半部**（`lib/index.js`）：settings 持久化（namespace `api-tools`）+
-  `/api/api-tools` HTTP API（list / save / delete / test / credential）+ 动态注册 Agent 工具。
+  `/api/api-tools` HTTP API（列表 / 保存 / 删除 / 测试 / 凭据 / 导入 / 导出）+
+  动态注册 Agent 工具。
 - **client 半部**（`lib/client.js`）：注册 `settings.section`（id `api-tools`），
   渲染 API 工具管理 UI，经 `fetch` 调用 host API。
 - 包同时声明 `dsh.bundle`（供 `dsh plugin add` 安装）与 `dsh.client`（供浏览器 roster 扫描）。

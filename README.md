@@ -6,11 +6,11 @@
 
 | 目录 | 包名 | 类型 | 作用 |
 |---|---|---|---|
-| `dsh-my-plugins` | `dsh-my-plugins` | **基础插件** | 在「设置」按钮上方提供「我的插件」大面板，聚合其余插件的设置页 |
+| `dsh-my-plugins` | `dsh-my-plugins` | **基础插件** | 提供可调节、记忆尺寸且随屏幕自适应的「我的插件」聚合面板 |
 | `dsh-skill-manager` | `dsh-skill-manager` | 业务插件 | 自定义技能（正文 + Python 脚本 + 能力引用） |
 | `dsh-skin-manager` | `dsh-skin-manager` | 业务插件 | 皮肤/主题切换（颜色令牌 + 自定义 CSS + 背景） |
-| `dsh-api-tools` | `@deepseek-ai/dsh-api-tools` | 业务插件 | 把第三方 HTTP API 配置成 Agent 工具 |
-| `database` | `@deepseek-ai/dsh-database-connections` | 业务插件 | MySQL / ClickHouse 连接管理与只读查询 |
+| `dsh-api-tools` | `@deepseek-ai/dsh-api-tools` | 业务插件 | 把第三方 HTTP API 配置成 Agent 工具，支持选择性导入导出 |
+| `database` | `@deepseek-ai/dsh-database-connections` | 业务插件 | MySQL / ClickHouse 连接管理、只读查询及选择性导入导出 |
 
 > 每个子目录都自带 `package.json`、`cordis.patch.yml`、安装脚本（`install.ps1` / `install.sh`）与安装说明；`*.tgz` 是打包产物，可用 `dsh plugin --profile web add <tgz>` 安装。
 
@@ -25,7 +25,20 @@ DSH Web 界面通过 **slot（插槽）** 让插件注册自己的设置页。�
 
 两者的**注册协议完全一致**（`list` 型，注册项带 `id` / `order` / `label` + 一个 React 组件），因此业务插件的设置页代码**零改动**即可在两种面板间迁移。
 
-## 三、【我的插件】与其他插件的关联关系（重点）
+「我的插件」面板会记忆浏览器中的上次宽高，并在视口变化时重新约束；宽度小于 720 像素时，
+左侧导航自动变为顶部导航，业务内容继续使用剩余宽高，避免弹窗缩小时出现页面级横向滚动。
+
+## 三、跨环境迁移 API 与数据库配置
+
+API 调用和数据库连接插件都使用统一的 `dsh-plugin-config`（DSH 插件配置）JSON 文件：
+
+- 可只勾选需要迁移的部分条目，也可全选；
+- 目标环境必须安装相同插件，导入时会校验插件标识和格式版本；
+- 冲突可选择跳过、覆盖或创建副本，所有条目先整体校验再写入；
+- API 配置只迁移凭据引用名，真实接口密钥不会进入文件；
+- 数据库配置不迁移密码，导入后须在目标环境补填并重新测试连接。
+
+## 四、【我的插件】与其他插件的关联关系（重点）
 
 `dsh-my-plugins` 是一个**基础插件**：它自己不提供业务能力，只提供一个更大的聚合容器（`my-plugins.section`），业务能力仍由其余插件贡献。
 
@@ -69,7 +82,7 @@ function apply(ctx) {
 }
 ```
 
-## 四、如何开发一个「后续插件」
+## 五、如何开发一个「后续插件」
 
 1. 复制任一业务插件目录（如 `dsh-skill-manager`）作为模板；
 2. `lib/index.js` 写 host 半部（业务逻辑 + HTTP API，按需声明 `inject`）；
@@ -79,7 +92,7 @@ function apply(ctx) {
 
 **无需任何额外代码**，新插件的设置页就会：装了「我的插件」时进入大面板、没装时进入设置面板。
 
-## 五、皮肤/主题规范（务必遵守）
+## 六、皮肤/主题规范（务必遵守）
 
 皮肤插件通过覆盖 DSH 主题 token 换肤，覆盖的是 **`--dsw-alias-*` / `--dsw-specific-*`** 这一族 token。
 
@@ -97,7 +110,7 @@ function apply(ctx) {
 
 完整 token 名可在运行中的 DSH 通过 `Theme.listTokens` 查询。
 
-## 六、安装
+## 七、安装
 
 各插件独立安装，推荐顺序（非强制）：
 

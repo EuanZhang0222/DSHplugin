@@ -48,13 +48,37 @@ window.__ModuleLoader__.load({
 			if (typeof json === "object" && json !== null && json.ok === false) throw new Error(json.error ?? "请求失败");
 			return json;
 		}
+		function downloadDocument(documentValue, prefix) {
+			const date = new Date();
+			const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}-${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}`;
+			const blob = new Blob([JSON.stringify(documentValue, null, 2)], { type: "application/json;charset=utf-8" });
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement("a");
+			link.href = url;
+			link.download = `${prefix}-${stamp}.dshconfig.json`;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			URL.revokeObjectURL(url);
+		}
+		async function readConfigFile(file) {
+			if (!file) throw new Error("请选择要导入的配置文件");
+			if (file.size > 5 * 1024 * 1024) throw new Error("配置文件不能超过 5 MB");
+			try {
+				return JSON.parse(await file.text());
+			} catch {
+				throw new Error("配置文件不是合法的 JSON（结构化数据）文件");
+			}
+		}
 		const styles = {
 			root: {
 				display: "flex",
 				flexDirection: "column",
-				gap: 16,
-				padding: "16px 20px",
-				maxWidth: 980,
+				gap: 12,
+				padding: "10px 4px 20px",
+				width: "100%",
+				minWidth: 0,
+				boxSizing: "border-box",
 				fontFamily: "inherit",
 				color: "var(--dsw-alias-label-primary)"
 			},
@@ -65,17 +89,18 @@ window.__ModuleLoader__.load({
 			},
 			grid: {
 				display: "flex",
-				gap: 16,
+				gap: 12,
 				alignItems: "stretch",
 				flexWrap: "wrap"
 			},
 			listPanel: {
-				flex: "0 0 260px",
-				minWidth: 220
+				flex: "1 1 280px",
+				minWidth: 260,
+				maxWidth: 380
 			},
 			formPanel: {
-				flex: 1,
-				minWidth: 340
+				flex: "3 1 480px",
+				minWidth: 300
 			},
 			card: {
 				border: "1px solid var(--dsw-alias-border-l2)",
@@ -87,11 +112,11 @@ window.__ModuleLoader__.load({
 				listStyle: "none",
 				margin: 0,
 				padding: 0,
-				maxHeight: 340,
+				maxHeight: 460,
 				overflowY: "auto"
 			},
 			listItem: {
-				padding: "8px 10px",
+				padding: "10px",
 				borderRadius: 6,
 				cursor: "pointer",
 				display: "flex",
@@ -134,13 +159,15 @@ window.__ModuleLoader__.load({
 				flexWrap: "wrap"
 			},
 			button: {
-				padding: "6px 12px",
+				padding: "7px 12px",
 				borderRadius: 6,
 				border: "1px solid var(--dsw-alias-border-l2)",
 				background: "var(--dsw-alias-bg-layer-2)",
 				color: "inherit",
 				cursor: "pointer",
-				fontSize: 13
+				fontSize: 13,
+				minHeight: 34,
+				boxSizing: "border-box"
 			},
 			primary: {
 				background: "var(--dsw-alias-button-primary-fill)",
@@ -150,8 +177,25 @@ window.__ModuleLoader__.load({
 			danger: {
 				background: "var(--dsw-alias-state-error-primary)",
 				borderColor: "var(--dsw-alias-state-error-primary)",
-				color: "#ffffff"
+				color: "var(--dsw-alias-label-primary-inverted)"
 			},
+			dangerText: {
+				background: "transparent",
+				borderColor: "var(--dsw-alias-state-error-primary)",
+				color: "var(--dsw-alias-state-error-primary)"
+			},
+			spacer: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
+			bulkBar: {
+				display: "flex",
+				alignItems: "center",
+				gap: 8,
+				flexWrap: "wrap",
+				padding: "8px 10px",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				borderRadius: 8,
+				background: "var(--dsw-alias-bg-layer-1)"
+			},
+			checkbox: { width: 18, height: 18, flex: "none", accentColor: "var(--dsw-alias-button-primary-fill)", cursor: "pointer" },
 			message: {
 				fontSize: 13,
 				whiteSpace: "pre-wrap"
@@ -203,6 +247,10 @@ window.__ModuleLoader__.load({
 			const [selectedDatabase, setSelectedDatabase] = (0, react.useState)("");
 			const [sql, setSql] = (0, react.useState)("");
 			const [result, setResult] = (0, react.useState)(null);
+			const [selectedIds, setSelectedIds] = (0, react.useState)([]);
+			const [conflictPolicy, setConflictPolicy] = (0, react.useState)("skip");
+			const [transferBusy, setTransferBusy] = (0, react.useState)(false);
+			const importInputRef = (0, react.useRef)(null);
 			const setField = (0, react.useCallback)((patch) => {
 				setForm((prev) => ({
 					...prev,
@@ -218,7 +266,9 @@ window.__ModuleLoader__.load({
 			/** 拉取连接列表。 */
 			const reload = (0, react.useCallback)(async () => {
 				try {
-					setConnections((await api("/list")).connections ?? []);
+					const nextConnections = (await api("/list")).connections ?? [];
+					setConnections(nextConnections);
+					setSelectedIds((ids) => ids.filter((id) => nextConnections.some((connection) => connection.id === id)));
 				} catch (error) {
 					showMessage("error", error instanceof Error ? error.message : String(error));
 				}
@@ -305,6 +355,7 @@ window.__ModuleLoader__.load({
 				setBusy(true);
 				try {
 					setConnections((await api("/delete", { id: editingId })).connections ?? []);
+					setSelectedIds((ids) => ids.filter((id) => id !== editingId));
 					handleNew();
 					showMessage("ok", "已删除连接");
 				} catch (error) {
@@ -385,12 +436,114 @@ window.__ModuleLoader__.load({
 				currentConnection,
 				showMessage
 			]);
+			const handleToggle = (0, react.useCallback)((id, checked) => {
+				setSelectedIds((ids) => checked
+					? (ids.includes(id) ? ids : [...ids, id])
+					: ids.filter((item) => item !== id));
+			}, []);
+			const handleToggleAll = (0, react.useCallback)((checked) => {
+				setSelectedIds(checked ? connections.map((connection) => connection.id) : []);
+			}, [connections]);
+			const handleExport = (0, react.useCallback)(async () => {
+				if (selectedIds.length === 0) return;
+				setTransferBusy(true);
+				try {
+					const data = await api("/export", { ids: selectedIds });
+					downloadDocument(data.document, "dsh-database-connections");
+					showMessage("ok", `已导出 ${selectedIds.length} 个数据库连接。为保护账号安全，文件不包含密码。`);
+				} catch (error) {
+					showMessage("error", error instanceof Error ? error.message : String(error));
+				} finally {
+					setTransferBusy(false);
+				}
+			}, [selectedIds, showMessage]);
+			const handleImport = (0, react.useCallback)(async (event) => {
+				const input = event.target;
+				const file = input.files?.[0];
+				input.value = "";
+				if (!file) return;
+				setTransferBusy(true);
+				try {
+					const documentValue = await readConfigFile(file);
+					const data = await api("/import", { document: documentValue, conflictPolicy });
+					const nextConnections = data.connections ?? [];
+					const summary = data.summary ?? {};
+					setConnections(nextConnections);
+					setSelectedIds([]);
+					handleNew();
+					showMessage("ok", `导入完成：新增 ${summary.imported ?? 0} 个，覆盖 ${summary.replaced ?? 0} 个，副本 ${summary.copied ?? 0} 个，跳过 ${summary.skipped ?? 0} 个。数据库密码不会随文件迁移，请逐项补填后测试连接。`);
+				} catch (error) {
+					showMessage("error", error instanceof Error ? error.message : String(error));
+				} finally {
+					setTransferBusy(false);
+				}
+			}, [conflictPolicy, handleNew, showMessage]);
+			const allSelected = connections.length > 0 && connections.every((connection) => selectedIds.includes(connection.id));
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: styles.root,
 				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
-						style: styles.title,
-						children: "数据库连接"
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: styles.spacer,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
+								style: styles.title,
+								children: "数据库连接"
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: { ...styles.muted, marginTop: 4 },
+								children: "集中管理 MySQL 与 ClickHouse 连接，并执行受限的只读查询。"
+							})]
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: { ...styles.button, ...styles.primary },
+							onClick: handleNew,
+							children: "新建连接"
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: styles.bulkBar,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							style: styles.checkbox,
+							checked: allSelected,
+							disabled: connections.length === 0 || transferBusy,
+							"aria-label": "选择全部数据库连接",
+							onChange: (e) => handleToggleAll(e.target.checked)
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: styles.muted,
+							children: selectedIds.length > 0 ? `已选 ${selectedIds.length} 项` : "选择要迁移的数据库连接"
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: { flex: 1 } }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+							style: { ...styles.label, display: "flex", alignItems: "center", gap: 6 },
+							children: ["导入冲突", /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("select", {
+								style: { ...styles.select, minHeight: 34, padding: "5px 8px" },
+								value: conflictPolicy,
+								disabled: transferBusy,
+								onChange: (e) => setConflictPolicy(e.target.value),
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", { value: "skip", children: "跳过已有项" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", { value: "replace", children: "覆盖已有项" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", { value: "copy", children: "另存为副本" })]
+							})]
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							ref: importInputRef,
+							type: "file",
+							accept: ".json,.dshconfig",
+							style: { display: "none" },
+							onChange: handleImport
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: styles.button,
+							disabled: transferBusy,
+							onClick: () => importInputRef.current?.click(),
+							children: transferBusy ? "处理中…" : "导入配置"
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: styles.button,
+							disabled: selectedIds.length === 0 || transferBusy,
+							onClick: handleExport,
+							children: `导出选中${selectedIds.length > 0 ? `（${selectedIds.length}）` : ""}`
+						})]
+					}),
+					message !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						role: "status",
+						style: { ...styles.message, ...message.kind === "ok" ? styles.ok : styles.error },
+						children: message.text
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						style: styles.grid,
@@ -406,12 +559,7 @@ window.__ModuleLoader__.load({
 									},
 									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 										style: styles.muted,
-										children: "已保存的连接"
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-										type: "button",
-										style: styles.button,
-										onClick: handleNew,
-										children: "新建"
+										children: `已保存的连接（${connections.length}）`
 									})]
 								}), connections.length === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 									style: styles.muted,
@@ -424,7 +572,14 @@ window.__ModuleLoader__.load({
 											...connection.id === editingId ? styles.listItemActive : {}
 										},
 										onClick: () => handleSelect(connection),
-										children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: connection.name }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+										type: "checkbox",
+										style: styles.checkbox,
+										checked: selectedIds.includes(connection.id),
+										"aria-label": `选择数据库连接：${connection.name}`,
+										onClick: (e) => e.stopPropagation(),
+										onChange: (e) => handleToggle(connection.id, e.target.checked)
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { style: { flex: 1, minWidth: 0 }, children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: connection.name }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 											style: styles.muted,
 											children: [
 												connection.type === "mysql" ? "MySQL" : "ClickHouse",
@@ -433,7 +588,7 @@ window.__ModuleLoader__.load({
 												":",
 												connection.port
 											]
-										})] })
+										})] })]
 									}, connection.id))
 								})]
 							})
@@ -442,6 +597,10 @@ window.__ModuleLoader__.load({
 							children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: styles.card,
 								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h4", {
+										style: { ...styles.title, fontSize: 14, marginBottom: 12 },
+										children: editingId !== "" ? `编辑连接：${form.name}` : "新建连接"
+									}),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										style: styles.field,
 										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
@@ -568,31 +727,31 @@ window.__ModuleLoader__.load({
 											}),
 											editingId !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
-												style: {
-													...styles.button,
-													...styles.danger
+											style: {
+												...styles.button,
+												...styles.dangerText
 												},
 												disabled: busy,
 												onClick: handleDelete,
 												children: "删除"
 											})
 										]
-									}),
-									message !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-										style: {
-											...styles.message,
-											...message.kind === "ok" ? styles.ok : styles.error,
-											marginTop: 10
-										},
-										children: message.text
 									})
 								]
 							})
 						})]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						style: styles.card,
-						children: [
+					style: styles.card,
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h4", {
+							style: { ...styles.title, fontSize: 14, marginBottom: 4 },
+							children: "数据浏览与只读查询"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: { ...styles.muted, marginBottom: 10 },
+							children: "先选择或填写一个连接，再浏览数据库与表；所有 SQL（结构化查询语言）都经过只读校验。"
+						}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: {
 									...styles.row,

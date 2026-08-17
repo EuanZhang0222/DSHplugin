@@ -9,6 +9,7 @@ window.__ModuleLoader__.load({
       useState,
       useEffect,
       useCallback,
+      useRef,
       Fragment
     } = react;
 
@@ -100,14 +101,41 @@ window.__ModuleLoader__.load({
       return json;
     }
 
+    /** 把宿主端生成的迁移文档下载为 JSON 文件。 */
+    function downloadDocument(documentValue, prefix) {
+      const date = new Date();
+      const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}-${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}`;
+      const blob = new Blob([JSON.stringify(documentValue, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${prefix}-${stamp}.dshconfig.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function readConfigFile(file) {
+      if (!file) throw new Error("请选择要导入的配置文件");
+      if (file.size > 5 * 1024 * 1024) throw new Error("配置文件不能超过 5 MB");
+      try {
+        return JSON.parse(await file.text());
+      } catch {
+        throw new Error("配置文件不是合法的 JSON（结构化数据）文件");
+      }
+    }
+
     // ---------- 样式 ----------
     const styles = {
       root: {
         display: "flex",
         flexDirection: "column",
-        gap: 14,
-        padding: "16px 20px",
-        maxWidth: 1080,
+        gap: 12,
+        padding: "10px 4px 20px",
+        width: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
         fontFamily: "inherit",
         color: "var(--dsw-alias-label-primary)"
       },
@@ -120,7 +148,7 @@ window.__ModuleLoader__.load({
         padding: 14
       },
       row: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
-      spacer: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" },
+      spacer: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" },
       field: { display: "flex", flexDirection: "column", gap: 4, marginBottom: 10, minWidth: 0 },
       label: { fontSize: 12, color: "var(--dsw-alias-label-secondary)" },
       input: {
@@ -157,26 +185,29 @@ window.__ModuleLoader__.load({
         lineHeight: 1.5
       },
       button: {
-        padding: "6px 12px",
+        padding: "7px 12px",
         borderRadius: 6,
         border: "1px solid var(--dsw-alias-border-l2)",
         background: "var(--dsw-alias-bg-layer-2)",
         color: "inherit",
         cursor: "pointer",
-        fontSize: 13
+        fontSize: 13,
+        minHeight: 34,
+        boxSizing: "border-box"
       },
       primary: { background: "var(--dsw-alias-button-primary-fill)", borderColor: "var(--dsw-alias-button-primary-fill)", color: "var(--dsw-alias-label-primary-inverted)" },
-      danger: { background: "var(--dsw-alias-state-error-primary)", borderColor: "var(--dsw-alias-state-error-primary)", color: "#ffffff" },
+      danger: { background: "var(--dsw-alias-state-error-primary)", borderColor: "var(--dsw-alias-state-error-primary)", color: "var(--dsw-alias-label-primary-inverted)" },
+      dangerText: { background: "transparent", borderColor: "var(--dsw-alias-state-error-primary)", color: "var(--dsw-alias-state-error-primary)" },
       subtle: { background: "transparent", color: "var(--dsw-alias-label-secondary)" },
-      summary: { display: "flex", gap: 10, flexWrap: "wrap" },
+      summary: { display: "flex", gap: 8, flexWrap: "wrap" },
       summaryItem: {
-        flex: "1 1 140px",
+        flex: "1 1 160px",
         border: "1px solid var(--dsw-alias-border-l2)",
         borderRadius: 8,
-        padding: "10px 12px",
+        padding: "8px 12px",
         background: "var(--dsw-alias-bg-layer-1)"
       },
-      summaryNum: { fontSize: 20, fontWeight: 600, display: "block", marginTop: 2 },
+      summaryNum: { fontSize: 18, fontWeight: 600, display: "block", marginTop: 1 },
       apiList: { display: "flex", flexDirection: "column", gap: 8 },
       apiCard: {
         display: "flex",
@@ -187,8 +218,10 @@ window.__ModuleLoader__.load({
         padding: "12px 14px",
         cursor: "pointer",
         background: "var(--dsw-alias-bg-layer-2)",
-        flexWrap: "wrap"
+        flexWrap: "wrap",
+        alignItems: "center"
       },
+      apiInfo: { flex: "1 1 360px", minWidth: 0 },
       apiTitle: { fontSize: 14, fontWeight: 600, margin: 0 },
       methodBadge: {
         display: "inline-flex",
@@ -229,9 +262,20 @@ window.__ModuleLoader__.load({
       msg: { fontSize: 13, whiteSpace: "pre-wrap" },
       ok: { color: "var(--dsw-alias-state-success-primary)" },
       error: { color: "var(--dsw-alias-state-error-primary)" },
-      grid2: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 },
-      gridUrl: { display: "grid", gridTemplateColumns: "160px minmax(0, 1fr)", gap: 12 },
-      gridAuth: { display: "grid", gridTemplateColumns: "220px minmax(0, 1fr)", gap: 12 },
+      grid2: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 },
+      gridUrl: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 },
+      gridAuth: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 },
+      bulkBar: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        padding: "8px 10px",
+        border: "1px solid var(--dsw-alias-border-l2)",
+        borderRadius: 8,
+        background: "var(--dsw-alias-bg-layer-1)"
+      },
+      checkbox: { width: 18, height: 18, flex: "none", accentColor: "var(--dsw-alias-button-primary-fill)", cursor: "pointer" },
       sectionTitle: { fontSize: 14, fontWeight: 600, margin: "0 0 6px" },
       empty: {
         border: "1px dashed var(--dsw-alias-border-l2)",
@@ -264,12 +308,25 @@ window.__ModuleLoader__.load({
       return h("div", { style: styles.summary }, [
         h("div", { key: "t", style: styles.summaryItem }, h("span", { style: styles.muted }, "已接入"), h("strong", { style: styles.summaryNum }, String(total))),
         h("div", { key: "e", style: styles.summaryItem }, h("span", { style: styles.muted }, "已启用给 Agent"), h("strong", { style: styles.summaryNum }, String(enabled))),
-        h("div", { key: "a", style: styles.summaryItem }, h("span", { style: styles.muted }, "需处理"), h("strong", { style: styles.summaryNum }, String(attention)))
+        h("div", { key: "a", style: styles.summaryItem }, h("span", { style: styles.muted }, "草稿"), h("strong", { style: styles.summaryNum }, String(attention)))
       ]);
     }
 
     /** API 工具列表视图。 */
-    function ListView({ tools, onOpen, onNew, onDelete }) {
+    function ListView({
+      tools,
+      onOpen,
+      onDelete,
+      selectedIds,
+      onToggle,
+      onToggleAll,
+      onExport,
+      onImport,
+      conflictPolicy,
+      onConflictPolicyChange,
+      importInputRef,
+      busy
+    }) {
       const [search, setSearch] = useState("");
       const [filter, setFilter] = useState("all");
       const keyword = search.trim().toLowerCase();
@@ -278,6 +335,8 @@ window.__ModuleLoader__.load({
         const hay = `${t.name} ${t.purpose} ${t.url} ${t.toolId}`.toLowerCase();
         return matchFilter && hay.includes(keyword);
       });
+      const selectedSet = new Set(selectedIds);
+      const allFilteredSelected = filtered.length > 0 && filtered.every((tool) => selectedSet.has(tool.id));
 
       return h(Fragment, null, [
         h(Summary, { key: "summary", tools }),
@@ -301,6 +360,55 @@ window.__ModuleLoader__.load({
             onClick: () => setFilter("draft")
           }, "草稿")
         ]),
+        h("div", { key: "bulk", style: styles.bulkBar }, [
+          h("input", {
+            key: "all",
+            type: "checkbox",
+            style: styles.checkbox,
+            checked: allFilteredSelected,
+            disabled: filtered.length === 0 || busy,
+            "aria-label": "选择当前筛选结果中的全部 API 工具",
+            onChange: (e) => onToggleAll(filtered.map((tool) => tool.id), e.target.checked)
+          }),
+          h("span", { key: "count", style: styles.muted }, selectedIds.length > 0 ? `已选 ${selectedIds.length} 项` : "选择要迁移的 API 工具"),
+          h("div", { key: "grow", style: { flex: 1 } }),
+          h("label", { key: "policyLabel", style: { ...styles.label, display: "flex", alignItems: "center", gap: 6 } }, [
+            "导入冲突",
+            h("select", {
+              key: "policy",
+              style: { ...styles.select, minHeight: 34, padding: "5px 8px" },
+              value: conflictPolicy,
+              disabled: busy,
+              onChange: (e) => onConflictPolicyChange(e.target.value)
+            }, [
+              h("option", { key: "skip", value: "skip" }, "跳过已有项"),
+              h("option", { key: "replace", value: "replace" }, "覆盖已有项"),
+              h("option", { key: "copy", value: "copy" }, "另存为副本")
+            ])
+          ]),
+          h("input", {
+            key: "file",
+            ref: importInputRef,
+            type: "file",
+            accept: ".json,.dshconfig",
+            style: { display: "none" },
+            onChange: onImport
+          }),
+          h("button", {
+            key: "import",
+            type: "button",
+            style: styles.button,
+            disabled: busy,
+            onClick: () => importInputRef.current?.click()
+          }, busy ? "处理中…" : "导入配置"),
+          h("button", {
+            key: "export",
+            type: "button",
+            style: styles.button,
+            disabled: selectedIds.length === 0 || busy,
+            onClick: onExport
+          }, `导出选中${selectedIds.length > 0 ? `（${selectedIds.length}）` : ""}`)
+        ]),
         filtered.length === 0
           ? h("div", { key: "empty", style: styles.empty }, "没有符合条件的 API 工具，可以新建一个。")
           : h("div", { key: "list", style: styles.apiList },
@@ -309,18 +417,27 @@ window.__ModuleLoader__.load({
                 style: styles.apiCard,
                 onClick: () => onOpen(t.id)
               }, [
-                h("div", { key: "info", style: { minWidth: 200 } }, [
+                h("input", {
+                  key: "select",
+                  type: "checkbox",
+                  style: styles.checkbox,
+                  checked: selectedSet.has(t.id),
+                  "aria-label": `选择 API 工具：${t.name}`,
+                  onClick: (e) => e.stopPropagation(),
+                  onChange: (e) => onToggle(t.id, e.target.checked)
+                }),
+                h("div", { key: "info", style: styles.apiInfo }, [
                   h("h3", { style: styles.apiTitle }, t.name),
                   h("div", { style: { ...styles.row, gap: 6, marginTop: 6 } }, [
                     h("span", { style: styles.methodBadge }, t.method),
-                    h("span", { style: styles.muted }, t.url),
+                    h("span", { style: { ...styles.muted, overflowWrap: "anywhere" } }, t.url),
                     h("span", { style: styles.muted }, `· ${t.params.length} 个参数`)
                   ])
                 ]),
                 h("div", { key: "right", style: styles.row }, [
                   h("span", { style: { ...styles.badge, ...(t.enabled ? styles.badgeEnabled : styles.badgeDraft) } }, t.enabled ? "已启用" : "草稿"),
-                  h("span", { style: styles.button }, "编辑"),
-                  h("button", { type: "button", style: { ...styles.button, ...styles.danger }, onClick: (e) => { e.stopPropagation(); onDelete(t); } }, "删除")
+                  h("button", { type: "button", style: styles.button, onClick: (e) => { e.stopPropagation(); onOpen(t.id); } }, "编辑"),
+                  h("button", { type: "button", style: { ...styles.button, ...styles.dangerText }, onClick: (e) => { e.stopPropagation(); onDelete(t); } }, "删除")
                 ])
               ]))
             )
@@ -756,10 +873,16 @@ window.__ModuleLoader__.load({
       const [editingId, setEditingId] = useState("");
       const [draft, setDraft] = useState(emptyDraft());
       const [message, setMessage] = useState(null);
+      const [selectedIds, setSelectedIds] = useState([]);
+      const [conflictPolicy, setConflictPolicy] = useState("skip");
+      const [transferBusy, setTransferBusy] = useState(false);
+      const importInputRef = useRef(null);
 
       const reload = useCallback(async () => {
         try {
-          setTools((await api("/list")).tools ?? []);
+          const nextTools = (await api("/list")).tools ?? [];
+          setTools(nextTools);
+          setSelectedIds((ids) => ids.filter((id) => nextTools.some((tool) => tool.id === id)));
         } catch (e) {
           setMessage({ kind: "error", text: e && e.message ? e.message : String(e) });
         }
@@ -786,21 +909,85 @@ window.__ModuleLoader__.load({
 
       const handleSaved = useCallback((nextTools, enable) => {
         setTools(nextTools);
+        setSelectedIds((ids) => ids.filter((id) => nextTools.some((tool) => tool.id === id)));
         setView("list");
         setMessage({ kind: "ok", text: enable ? "已保存并启用给 Agent" : "草稿已保存" });
       }, []);
 
-      const handleDelete = useCallback(async (tool) => {
+      const handleDelete = useCallback(async (toolOrId) => {
+        const tool = typeof toolOrId === "string" ? tools.find((item) => item.id === toolOrId) : toolOrId;
+        if (!tool) return;
         if (!globalThis.confirm(`确定删除「${tool.name}」吗？删除后不可恢复。`)) return;
         try {
           const data = await api("/delete", { id: tool.id });
-          setTools(data.tools ?? []);
+          const nextTools = data.tools ?? [];
+          setTools(nextTools);
+          setSelectedIds((ids) => ids.filter((id) => id !== tool.id));
           setView("list");
           setMessage({ kind: "ok", text: `已删除「${tool.name}」` });
         } catch (e) {
           setMessage({ kind: "error", text: e && e.message ? e.message : String(e) });
         }
+      }, [tools]);
+
+      const handleToggle = useCallback((id, checked) => {
+        setSelectedIds((ids) => checked
+          ? (ids.includes(id) ? ids : [...ids, id])
+          : ids.filter((item) => item !== id));
       }, []);
+
+      const handleToggleAll = useCallback((ids, checked) => {
+        setSelectedIds((current) => {
+          const next = new Set(current);
+          for (const id of ids) checked ? next.add(id) : next.delete(id);
+          return [...next];
+        });
+      }, []);
+
+      const handleExport = useCallback(async () => {
+        if (selectedIds.length === 0) return;
+        setTransferBusy(true);
+        try {
+          const data = await api("/export", { ids: selectedIds });
+          downloadDocument(data.document, "dsh-api-tools");
+          setMessage({ kind: "ok", text: `已导出 ${selectedIds.length} 个 API 工具。文件仅包含凭据引用，不包含真实密钥。` });
+        } catch (e) {
+          setMessage({ kind: "error", text: e && e.message ? e.message : String(e) });
+        } finally {
+          setTransferBusy(false);
+        }
+      }, [selectedIds]);
+
+      const handleImport = useCallback(async (event) => {
+        const input = event.target;
+        const file = input.files?.[0];
+        input.value = "";
+        if (!file) return;
+        setTransferBusy(true);
+        try {
+          const documentValue = await readConfigFile(file);
+          const data = await api("/import", { document: documentValue, conflictPolicy });
+          const nextTools = data.tools ?? [];
+          const summary = data.summary ?? {};
+          const refs = data.requiredCredentials ?? [];
+          setTools(nextTools);
+          setSelectedIds([]);
+          const parts = [
+            `新增 ${summary.imported ?? 0} 个`,
+            `覆盖 ${summary.replaced ?? 0} 个`,
+            `副本 ${summary.copied ?? 0} 个`,
+            `跳过 ${summary.skipped ?? 0} 个`
+          ];
+          setMessage({
+            kind: "ok",
+            text: `导入完成：${parts.join("，")}。${refs.length > 0 ? `请在目标环境配置同名凭据：${refs.join("、")}。` : "该配置包不包含真实密钥。"}`
+          });
+        } catch (e) {
+          setMessage({ kind: "error", text: e && e.message ? e.message : String(e) });
+        } finally {
+          setTransferBusy(false);
+        }
+      }, [conflictPolicy]);
 
       return h("div", { style: styles.root }, [
         h("div", { style: styles.spacer }, [
@@ -816,7 +1003,20 @@ window.__ModuleLoader__.load({
           ? h("div", { style: { ...styles.msg, ...(message.kind === "ok" ? styles.ok : styles.error) } }, message.text)
           : null,
         view === "list"
-          ? h(ListView, { tools, onOpen: openEditor, onNew: () => openEditor(""), onDelete: handleDelete })
+          ? h(ListView, {
+              tools,
+              onOpen: openEditor,
+              onDelete: handleDelete,
+              selectedIds,
+              onToggle: handleToggle,
+              onToggleAll: handleToggleAll,
+              onExport: handleExport,
+              onImport: handleImport,
+              conflictPolicy,
+              onConflictPolicyChange: setConflictPolicy,
+              importInputRef,
+              busy: transferBusy
+            })
           : h(EditorView, {
               draft,
               isNew: editingId === "",

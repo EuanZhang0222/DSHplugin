@@ -11,7 +11,7 @@ import { createClient } from "@clickhouse/client";
 * 1. 连接列表的持久化（settings namespace `database-connections`，密码走
 *    role('secret')，不会被 wire 层的 describe 泄露）。
 * 2. /api/database-connections 前缀 HTTP API，供 client 端设置页调用：
-*    list / save / delete / test / databases / tables / query。
+*    list / save / delete / test / databases / tables / query / export / import。
 * 3. 真实的 MySQL（mysql2）与 ClickHouse（@clickhouse/client）连接、探活与
 *    只读查询。
 *
@@ -36,6 +36,12 @@ const NAMESPACE = settingsNamespace("database-connections");
 const API_PREFIX = "/api/database-connections";
 const MAX_ROWS = 200;
 const TIMEOUT_MS = 15e3;
+const MAX_CONFIG_DOCUMENT_BYTES = 5 * 1024 * 1024;
+const MAX_IMPORT_ITEMS = 500;
+const EXPORT_FORMAT = "dsh-plugin-config";
+const EXPORT_FORMAT_VERSION = 1;
+const PLUGIN_ID = "@deepseek-ai/dsh-database-connections";
+const PLUGIN_VERSION = "1.0.0";
 /** 只读 SQL 白名单前缀。 */
 const READ_ONLY_PREFIX = /^\s*(select|show|describe|desc|explain|with)\b/i;
 /** 判断一个数据库类型是否为已知类型。 */
@@ -78,7 +84,7 @@ function readJsonBody(req) {
 		let data = "";
 		req.on("data", (chunk) => {
 			data += chunk;
-			if (data.length > 1e6) {
+			if (data.length > MAX_CONFIG_DOCUMENT_BYTES) {
 				reject(new ApiError(413, "请求体过大"));
 				req.destroy();
 			}
@@ -117,6 +123,13 @@ function readConnection(input) {
 		password: typeof record["password"] === "string" ? record["password"] : "",
 		database: typeof record["database"] === "string" ? record["database"] : ""
 	};
+}
+/** 已保存连接在前端不会回传密码；执行测试/查询时按 id 补回宿主端保存的密码。 */
+function readOperationalConnection(scope, input) {
+	const connection = readConnection(input);
+	if (connection.password.length > 0 || connection.id.length === 0) return connection;
+	const existing = scope.get().connections.find((item) => item.id === connection.id);
+	return existing === void 0 ? connection : { ...connection, password: existing.password };
 }
 /** MySQL 连接工厂。 */
 async function withMySql(connection, run) {
@@ -232,6 +245,114 @@ function sendJson(res, status, payload) {
 	});
 	res.end(body);
 }
+
+/** 生成不含数据库密码的可迁移配置文件。 */
+function createExportDocument(connections) {
+	return {
+		format: EXPORT_FORMAT,
+		formatVersion: EXPORT_FORMAT_VERSION,
+		plugin: PLUGIN_ID,
+		pluginVersion: PLUGIN_VERSION,
+		exportedAt: new Date().toISOString(),
+		secretPolicy: "passwords-omitted",
+		items: connections.map((connection) => ({
+			id: connection.id,
+			name: connection.name,
+			type: connection.type,
+			host: connection.host,
+			port: connection.port,
+			username: connection.username,
+			database: connection.database
+		}))
+	};
+}
+
+function readImportDocument(value) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new ApiError(400, "导入文件不是合法的 DSH 插件配置对象");
+	}
+	if (value["format"] !== EXPORT_FORMAT || value["formatVersion"] !== EXPORT_FORMAT_VERSION) {
+		throw new ApiError(400, "导入文件格式或版本不受支持");
+	}
+	if (value["plugin"] !== PLUGIN_ID) {
+		throw new ApiError(400, "该文件不是数据库连接插件的配置包");
+	}
+	const items = value["items"];
+	if (!Array.isArray(items)) throw new ApiError(400, "导入文件缺少 items 配置列表");
+	if (items.length === 0) throw new ApiError(400, "导入文件中没有可导入的数据库连接");
+	if (items.length > MAX_IMPORT_ITEMS) throw new ApiError(400, `单次最多导入 ${MAX_IMPORT_ITEMS} 个数据库连接`);
+	return items;
+}
+
+function readConflictPolicy(value) {
+	return value === "replace" || value === "copy" ? value : "skip";
+}
+
+function uniqueConnectionName(base, connections) {
+	const used = new Set(connections.map((connection) => connection.name.trim().toLowerCase()));
+	let candidate = `${base}（导入副本）`;
+	let index = 2;
+	while (used.has(candidate.trim().toLowerCase())) {
+		candidate = `${base}（导入副本 ${index}）`;
+		index += 1;
+	}
+	return candidate;
+}
+
+/** 原子计算批量导入结果；任何条目格式错误都会终止整次导入。 */
+function mergeImportedConnections(existingConnections, rawItems, policy) {
+	const parsed = rawItems.map((item, index) => {
+		try {
+			return { ...readConnection(item), password: "" };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new ApiError(400, `第 ${index + 1} 个数据库连接无效：${message}`);
+		}
+	});
+
+	const next = [...existingConnections];
+	const summary = { imported: 0, replaced: 0, copied: 0, skipped: 0 };
+	const skipped = [];
+
+	for (const input of parsed) {
+		const inputName = input.name.trim().toLowerCase();
+		const matches = next.filter((connection) =>
+			(input.id && connection.id === input.id) || connection.name.trim().toLowerCase() === inputName
+		);
+		const targets = [...new Map(matches.map((connection) => [connection.id, connection])).values()];
+
+		if (targets.length > 0 && policy === "skip") {
+			summary.skipped += 1;
+			skipped.push({ name: input.name, reason: "同 ID 或连接名称已存在" });
+			continue;
+		}
+		if (targets.length > 1 && policy === "replace") {
+			summary.skipped += 1;
+			skipped.push({ name: input.name, reason: "ID 与连接名称分别命中不同连接，无法安全覆盖" });
+			continue;
+		}
+		if (targets.length === 1 && policy === "replace") {
+			const target = targets[0];
+			next[next.indexOf(target)] = { ...input, id: target.id, password: target.password };
+			summary.replaced += 1;
+			continue;
+		}
+		if (targets.length > 0 && policy === "copy") {
+			next.push({ ...input, id: randomUUID(), name: uniqueConnectionName(input.name, next), password: "" });
+			summary.copied += 1;
+			continue;
+		}
+
+		next.push({
+			...input,
+			id: input.id && !next.some((connection) => connection.id === input.id) ? input.id : randomUUID(),
+			password: ""
+		});
+		summary.imported += 1;
+	}
+
+	return { connections: next, summary, skipped };
+}
 /**
 * 注册 host 半部：settings 持久化 + HTTP API。依赖 settings 与 webServer，
 * 两者都由 web profile 提供。
@@ -267,7 +388,7 @@ function apply(ctx) {
 }
 /** 按 path + method 分发请求。 */
 async function dispatch(scope, req, res) {
-	const sub = new URL(req.url ?? "/", "http://x").pathname.slice(25).replace(/^\/+/, "");
+	const sub = new URL(req.url ?? "/", "http://x").pathname.slice(API_PREFIX.length).replace(/^\/+/, "");
 	const method = req.method ?? "GET";
 	if (method === "GET" && (sub === "" || sub === "list")) {
 		sendJson(res, 200, {
@@ -313,29 +434,54 @@ async function dispatch(scope, req, res) {
 		});
 		return;
 	}
+	if (method === "POST" && sub === "export") {
+		const ids = Array.isArray(body["ids"])
+			? body["ids"].filter((id) => typeof id === "string" && id.length > 0)
+			: [];
+		if (ids.length === 0) throw new ApiError(400, "请至少选择一个数据库连接再导出");
+		const idSet = new Set(ids);
+		const selected = scope.get().connections.filter((connection) => idSet.has(connection.id));
+		if (selected.length === 0) throw new ApiError(400, "没有找到可导出的数据库连接");
+		sendJson(res, 200, { ok: true, document: createExportDocument(selected) });
+		return;
+	}
+	if (method === "POST" && sub === "import") {
+		const rawDocument = body["document"] ?? body;
+		const rawItems = readImportDocument(rawDocument);
+		const result = mergeImportedConnections(scope.get().connections, rawItems, readConflictPolicy(body["conflictPolicy"]));
+		await scope.replace({ connections: result.connections });
+		sendJson(res, 200, {
+			ok: true,
+			connections: result.connections.map(toView),
+			summary: result.summary,
+			skipped: result.skipped,
+			passwordsOmitted: rawItems.length
+		});
+		return;
+	}
 	if (method === "POST" && sub === "test") {
 		sendJson(res, 200, {
 			ok: true,
-			...await testConnection(readConnection(body["connection"] ?? body))
+			...await testConnection(readOperationalConnection(scope, body["connection"] ?? body))
 		});
 		return;
 	}
 	if (method === "POST" && sub === "databases") {
 		sendJson(res, 200, {
 			ok: true,
-			...await listDatabases(readConnection(body["connection"] ?? body))
+			...await listDatabases(readOperationalConnection(scope, body["connection"] ?? body))
 		});
 		return;
 	}
 	if (method === "POST" && sub === "tables") {
 		sendJson(res, 200, {
 			ok: true,
-			...await listTables(readConnection(body["connection"] ?? body), typeof body["database"] === "string" ? body["database"] : "")
+			...await listTables(readOperationalConnection(scope, body["connection"] ?? body), typeof body["database"] === "string" ? body["database"] : "")
 		});
 		return;
 	}
 	if (method === "POST" && sub === "query") {
-		const connection = readConnection(body["connection"] ?? body);
+		const connection = readOperationalConnection(scope, body["connection"] ?? body);
 		const sql = body["sql"];
 		if (typeof sql !== "string") throw new ApiError(400, "缺少 sql");
 		sendJson(res, 200, {

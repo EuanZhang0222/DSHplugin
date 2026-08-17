@@ -4,7 +4,7 @@
  * 提供：
  * 1. API 工具配置的持久化（settings namespace `api-tools`）。
  * 2. /api/api-tools 前缀 HTTP API，供 client 端设置页调用：
- *    list / save / delete / test / credential。
+ *    list / save / delete / test / credential / export / import。
  * 3. 动态工具注册：把每个「已启用」的 API 配置注册成一个有明确参数的
  *    Agent 工具；Agent 在合适的时候调用该工具，即可发起第三方 API 请求，
  *    实现数据查询或控制指令下发。
@@ -28,6 +28,12 @@ const API_PREFIX = "/api/api-tools";
 const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 默认 10 MB
 const MAX_RESPONSE_BYTES_LIMIT = 50 * 1024 * 1024; // 上限 50 MB
 const DEFAULT_TIMEOUT_MS = 60e3; // 60 秒
+const MAX_CONFIG_DOCUMENT_BYTES = 5 * 1024 * 1024; // 批量配置文件最大 5 MB
+const MAX_IMPORT_ITEMS = 500;
+const EXPORT_FORMAT = "dsh-plugin-config";
+const EXPORT_FORMAT_VERSION = 1;
+const PLUGIN_ID = "@deepseek-ai/dsh-api-tools";
+const PLUGIN_VERSION = "1.0.0";
 
 /** 参数位置白名单。 */
 const PARAM_LOCATIONS = ["path", "query", "header", "body"];
@@ -431,7 +437,7 @@ function readJsonBody(req) {
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
-      if (data.length > 1e6) {
+      if (data.length > MAX_CONFIG_DOCUMENT_BYTES) {
         reject(new ApiError(413, "请求体过大"));
         req.destroy();
       }
@@ -473,7 +479,132 @@ function toView(tool) {
     auth: tool.auth,
     credential: tool.credential,
     enabled: tool.enabled,
+    maxResponseBytes: clampMaxResponse(tool.maxResponseBytes),
     params: tool.params.map((p) => ({ ...p }))
+  };
+}
+
+/** 生成不含真实密钥的可迁移 API 配置文件。 */
+function createExportDocument(tools) {
+  return {
+    format: EXPORT_FORMAT,
+    formatVersion: EXPORT_FORMAT_VERSION,
+    plugin: PLUGIN_ID,
+    pluginVersion: PLUGIN_VERSION,
+    exportedAt: new Date().toISOString(),
+    secretPolicy: "references-only",
+    items: tools.map(toView)
+  };
+}
+
+/** 校验导入文件的外壳，具体条目继续复用 readTool 的严格校验。 */
+function readImportDocument(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ApiError(400, "导入文件不是合法的 DSH 插件配置对象");
+  }
+  if (value["format"] !== EXPORT_FORMAT || value["formatVersion"] !== EXPORT_FORMAT_VERSION) {
+    throw new ApiError(400, "导入文件格式或版本不受支持");
+  }
+  if (value["plugin"] !== PLUGIN_ID) {
+    throw new ApiError(400, "该文件不是 API 调用插件的配置包");
+  }
+  const items = value["items"];
+  if (!Array.isArray(items)) throw new ApiError(400, "导入文件缺少 items 配置列表");
+  if (items.length === 0) throw new ApiError(400, "导入文件中没有可导入的 API 工具");
+  if (items.length > MAX_IMPORT_ITEMS) throw new ApiError(400, `单次最多导入 ${MAX_IMPORT_ITEMS} 个 API 工具`);
+  return items;
+}
+
+function readConflictPolicy(value) {
+  return value === "replace" || value === "copy" ? value : "skip";
+}
+
+function uniqueToolId(base, tools) {
+  const used = new Set(tools.map((tool) => tool.toolId));
+  let candidate = `${base}_copy`;
+  let index = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}_copy_${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function collectCredentialRefsFromParam(param, refs) {
+  if (param.source === "credential" && param.defaultValue) refs.add(param.defaultValue);
+  for (const child of param.children ?? []) collectCredentialRefsFromParam(child, refs);
+}
+
+/**
+ * 原子计算导入结果：全部条目先完成格式校验，再一次性替换 settings。
+ * skip=跳过冲突，replace=覆盖唯一冲突项，copy=冲突项另存副本。
+ */
+function mergeImportedTools(existingTools, rawItems, policy) {
+  const parsed = rawItems.map((item, index) => {
+    try {
+      const tool = readTool(item);
+      assertToolId(tool.toolId);
+      return tool;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ApiError(400, `第 ${index + 1} 个 API 工具无效：${message}`);
+    }
+  });
+
+  const next = [...existingTools];
+  const summary = { imported: 0, replaced: 0, copied: 0, skipped: 0 };
+  const skipped = [];
+  const credentialRefs = new Set();
+
+  for (const input of parsed) {
+    if (input.auth !== "none" && input.credential) credentialRefs.add(input.credential);
+    for (const param of input.params) collectCredentialRefsFromParam(param, credentialRefs);
+
+    const matches = next.filter((tool) => (input.id && tool.id === input.id) || tool.toolId === input.toolId);
+    const targets = [...new Map(matches.map((tool) => [tool.id, tool])).values()];
+
+    if (targets.length > 0 && policy === "skip") {
+      summary.skipped += 1;
+      skipped.push({ name: input.name, reason: "同 ID 或系统工具标识已存在" });
+      continue;
+    }
+
+    if (targets.length > 1 && policy === "replace") {
+      summary.skipped += 1;
+      skipped.push({ name: input.name, reason: "ID 与系统工具标识分别命中不同工具，无法安全覆盖" });
+      continue;
+    }
+
+    if (targets.length === 1 && policy === "replace") {
+      const target = targets[0];
+      next[next.indexOf(target)] = { ...input, id: target.id };
+      summary.replaced += 1;
+      continue;
+    }
+
+    if (targets.length > 0 && policy === "copy") {
+      next.push({
+        ...input,
+        id: randomUUID(),
+        name: `${input.name}（导入副本）`,
+        toolId: uniqueToolId(input.toolId, next)
+      });
+      summary.copied += 1;
+      continue;
+    }
+
+    next.push({
+      ...input,
+      id: input.id && !next.some((tool) => tool.id === input.id) ? input.id : randomUUID()
+    });
+    summary.imported += 1;
+  }
+
+  return {
+    tools: next,
+    summary,
+    skipped,
+    requiredCredentials: [...credentialRefs].sort()
   };
 }
 
@@ -518,6 +649,33 @@ async function dispatch(scope, sctx, req, res) {
     const nextTools = scope.get().tools.filter((t) => t.id !== id);
     await scope.replace({ tools: nextTools });
     sendJson(res, 200, { ok: true, tools: nextTools.map(toView) });
+    return;
+  }
+
+  if (method === "POST" && sub === "export") {
+    const ids = Array.isArray(body["ids"])
+      ? body["ids"].filter((id) => typeof id === "string" && id.length > 0)
+      : [];
+    if (ids.length === 0) throw new ApiError(400, "请至少选择一个 API 工具再导出");
+    const idSet = new Set(ids);
+    const selected = scope.get().tools.filter((tool) => idSet.has(tool.id));
+    if (selected.length === 0) throw new ApiError(400, "没有找到可导出的 API 工具");
+    sendJson(res, 200, { ok: true, document: createExportDocument(selected) });
+    return;
+  }
+
+  if (method === "POST" && sub === "import") {
+    const rawDocument = body["document"] ?? body;
+    const rawItems = readImportDocument(rawDocument);
+    const result = mergeImportedTools(scope.get().tools, rawItems, readConflictPolicy(body["conflictPolicy"]));
+    await scope.replace({ tools: result.tools });
+    sendJson(res, 200, {
+      ok: true,
+      tools: result.tools.map(toView),
+      summary: result.summary,
+      skipped: result.skipped,
+      requiredCredentials: result.requiredCredentials
+    });
     return;
   }
 
