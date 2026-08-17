@@ -43,6 +43,10 @@ window.__ModuleLoader__.load({
       { value: "credential", label: "凭据引用" },
       { value: "default", label: "默认值" }
     ];
+    const EXPORT_FORMAT = "dsh-plugin-config";
+    const EXPORT_FORMAT_VERSION = 1;
+    const PLUGIN_ID = "@deepseek-ai/dsh-api-tools";
+    const PLUGIN_VERSION = "1.0.0";
 
     function emptyDraft() {
       return {
@@ -97,11 +101,45 @@ window.__ModuleLoader__.load({
       } catch {
         throw new Error(`后端返回了非 JSON 响应（HTTP ${String(res.status)}）`);
       }
-      if (json && typeof json === "object" && json.ok === false) throw new Error(json.error ?? "请求失败");
+      if (json && typeof json === "object" && json.ok === false) {
+        const message = json.error ?? "请求失败";
+        if (/未知接口.*POST.*(?:export|import)/i.test(message)) {
+          throw new Error("DSH 宿主端仍在运行旧版 API 调用插件，请重启 DSH 后再导入配置");
+        }
+        throw new Error(message);
+      }
       return json;
     }
 
-    /** 把宿主端生成的迁移文档下载为 JSON 文件。 */
+    /**
+     * 直接从已脱敏的列表数据生成迁移文档。
+     * 导出不再依赖宿主端 /export 路由，避免浏览器端热更新而宿主进程仍驻留旧代码时失败。
+     */
+    function createExportDocument(tools) {
+      return {
+        format: EXPORT_FORMAT,
+        formatVersion: EXPORT_FORMAT_VERSION,
+        plugin: PLUGIN_ID,
+        pluginVersion: PLUGIN_VERSION,
+        exportedAt: new Date().toISOString(),
+        secretPolicy: "references-only",
+        items: tools.map((tool) => ({
+          id: tool.id,
+          name: tool.name,
+          toolId: tool.toolId,
+          purpose: tool.purpose,
+          method: tool.method,
+          url: tool.url,
+          auth: tool.auth,
+          credential: tool.credential,
+          enabled: tool.enabled,
+          maxResponseBytes: tool.maxResponseBytes,
+          params: Array.isArray(tool.params) ? tool.params : []
+        }))
+      };
+    }
+
+    /** 把迁移文档下载为 JSON 文件。 */
     function downloadDocument(documentValue, prefix) {
       const date = new Date();
       const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}-${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}`;
@@ -948,15 +986,17 @@ window.__ModuleLoader__.load({
         if (selectedIds.length === 0) return;
         setTransferBusy(true);
         try {
-          const data = await api("/export", { ids: selectedIds });
-          downloadDocument(data.document, "dsh-api-tools");
-          setMessage({ kind: "ok", text: `已导出 ${selectedIds.length} 个 API 工具。文件仅包含凭据引用，不包含真实密钥。` });
+          const selectedSet = new Set(selectedIds);
+          const selectedTools = tools.filter((tool) => selectedSet.has(tool.id));
+          if (selectedTools.length === 0) throw new Error("没有找到可导出的 API 工具");
+          downloadDocument(createExportDocument(selectedTools), "dsh-api-tools");
+          setMessage({ kind: "ok", text: `已导出 ${selectedTools.length} 个 API 工具。文件仅包含凭据引用，不包含真实密钥。` });
         } catch (e) {
           setMessage({ kind: "error", text: e && e.message ? e.message : String(e) });
         } finally {
           setTransferBusy(false);
         }
-      }, [selectedIds]);
+      }, [selectedIds, tools]);
 
       const handleImport = useCallback(async (event) => {
         const input = event.target;

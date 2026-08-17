@@ -15,6 +15,10 @@ window.__ModuleLoader__.load({
 			mysql: 3306,
 			clickhouse: 8123
 		};
+		const EXPORT_FORMAT = "dsh-plugin-config";
+		const EXPORT_FORMAT_VERSION = 1;
+		const PLUGIN_ID = "@deepseek-ai/dsh-database-connections";
+		const PLUGIN_VERSION = "1.0.0";
 		function emptyForm(type = "mysql") {
 			return {
 				name: "",
@@ -45,8 +49,37 @@ window.__ModuleLoader__.load({
 			} catch {
 				throw new Error(`后端返回了非 JSON 响应（HTTP ${String(res.status)}）`);
 			}
-			if (typeof json === "object" && json !== null && json.ok === false) throw new Error(json.error ?? "请求失败");
+			if (typeof json === "object" && json !== null && json.ok === false) {
+				const message = json.error ?? "请求失败";
+				if (/未知接口.*POST.*(?:export|import)/i.test(message)) {
+					throw new Error("DSH 宿主端仍在运行旧版数据库连接插件，请重启 DSH 后再导入配置");
+				}
+				throw new Error(message);
+			}
 			return json;
+		}
+		/**
+		* 直接从列表接口返回的脱敏连接生成迁移文档。
+		* 只挑选允许迁移的字段，hasPassword（是否有密码）等运行状态不会进入文件。
+		*/
+		function createExportDocument(connections) {
+			return {
+				format: EXPORT_FORMAT,
+				formatVersion: EXPORT_FORMAT_VERSION,
+				plugin: PLUGIN_ID,
+				pluginVersion: PLUGIN_VERSION,
+				exportedAt: new Date().toISOString(),
+				secretPolicy: "passwords-omitted",
+				items: connections.map((connection) => ({
+					id: connection.id,
+					name: connection.name,
+					type: connection.type,
+					host: connection.host,
+					port: connection.port,
+					username: connection.username,
+					database: connection.database
+				}))
+			};
 		}
 		function downloadDocument(documentValue, prefix) {
 			const date = new Date();
@@ -448,15 +481,17 @@ window.__ModuleLoader__.load({
 				if (selectedIds.length === 0) return;
 				setTransferBusy(true);
 				try {
-					const data = await api("/export", { ids: selectedIds });
-					downloadDocument(data.document, "dsh-database-connections");
-					showMessage("ok", `已导出 ${selectedIds.length} 个数据库连接。为保护账号安全，文件不包含密码。`);
+					const selectedSet = new Set(selectedIds);
+					const selectedConnections = connections.filter((connection) => selectedSet.has(connection.id));
+					if (selectedConnections.length === 0) throw new Error("没有找到可导出的数据库连接");
+					downloadDocument(createExportDocument(selectedConnections), "dsh-database-connections");
+					showMessage("ok", `已导出 ${selectedConnections.length} 个数据库连接。为保护账号安全，文件不包含密码。`);
 				} catch (error) {
 					showMessage("error", error instanceof Error ? error.message : String(error));
 				} finally {
 					setTransferBusy(false);
 				}
-			}, [selectedIds, showMessage]);
+			}, [selectedIds, connections, showMessage]);
 			const handleImport = (0, react.useCallback)(async (event) => {
 				const input = event.target;
 				const file = input.files?.[0];
