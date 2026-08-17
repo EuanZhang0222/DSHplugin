@@ -14,13 +14,15 @@
   渲染时展开成调用指引注入正文；
 - **正文内联引用**：正文里写 `@api:工具名` 引用接口、`@db:连接名` 引用数据库连接，等价于上面的下拉选择；
 - **SQL 直接写在正文**：正文里写 ```sql 代码块，配合 `@db:连接名` 标注，即可让模型用 `query_database` 工具执行查询；
+- **批量导出与导入**：勾选部分或全部技能，导出为 `.dshconfig.json` 配置文件，并在另一套已安装本插件的
+  DSH 环境中导入；名称冲突可选择「跳过已有项 / 覆盖已有项 / 创建导入副本」；
 - 配置变更（保存 / 删除 / 启用切换）后自动热更新技能集，无需重启。
 
 ## 架构
 
 - **host 半部**（`lib/index.js`）：扫描 `~/.dsh/skills/` 技能目录，把已启用技能经
   `ctx.skills.register` 注册成运行时 skill，并提供 `/api/dsh-skill-manager` HTTP API
-  （list / save / remove / catalog）。技能同时落盘为标准 frontmatter Markdown 文件，
+  （list / save / remove / catalog / export / import）。技能同时落盘为标准 frontmatter Markdown 文件，
   即使本插件卸载，其它 skill provider（如 skill-filesystem）仍可发现。
 - **client 半部**（`lib/client.js`）：注册 `settings.section`（id `dsh-skill-manager`），
   渲染技能管理 UI，经同源 `fetch` 调用 host API。
@@ -74,6 +76,23 @@ chmod +x install.sh && ./install.sh
   就会按接口说明发起真实请求。
 - 给技能添加「能力引用」：下拉选一个数据库连接（如 `uat`），再写表名；或在正文直接写
   `@db:uat` + ```sql 查询语句，模型会用 `query_database` 工具执行只读查询。
+
+### 批量迁移技能
+
+1. 在技能列表勾选需要迁移的部分或全部技能。
+2. 点击「导出选中」，浏览器下载 `dsh-skill-manager-*.dshconfig.json`。
+3. 在目标 DSH 环境安装相同插件，选择导入冲突策略后点击「导入配置」。
+4. 导入完成后核对技能正文、启用状态及能力引用，并确认目标环境存在同名 API 工具、数据库连接和被引用技能。
+
+冲突策略说明：
+
+- 「跳过已有项」：同名技能保留目标环境版本；
+- 「覆盖已有项」：同名技能替换为导入版本；
+- 「创建导入副本」：自动生成 `原名称-copy` 等合法新名称；若同一配置包里的技能互相通过
+  `@技能名` 引用，插件会同步改写为副本名称。
+
+> 迁移文件不包含 API 密钥或数据库密码，但会包含完整技能正文、Python 脚本、SQL 和能力引用。
+> 如果用户曾把敏感值直接写进正文或脚本，它也会随文件导出，迁移前应自行检查。
 
 ### 正文引用语法一览
 

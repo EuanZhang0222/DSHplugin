@@ -8,10 +8,15 @@ window.__ModuleLoader__.load({
       createElement: h,
       useState,
       useEffect,
+      useRef,
       Fragment
     } = react;
 
     const inject = ["slots"];
+    const EXPORT_FORMAT = "dsh-plugin-config";
+    const EXPORT_FORMAT_VERSION = 1;
+    const PLUGIN_ID = "dsh-skill-manager";
+    const PLUGIN_VERSION = "1.0.0";
 
     // ---------- host API ----------
 
@@ -33,19 +38,74 @@ window.__ModuleLoader__.load({
       } catch {
         throw new Error(`后端返回了非 JSON 响应（HTTP ${String(res.status)}）`);
       }
-      if (json && typeof json === "object" && json.ok === false) throw new Error(json.error ?? "请求失败");
+      if (json && typeof json === "object" && json.ok === false) {
+        const message = json.error ?? "请求失败";
+        if (/未知接口.*POST.*(?:export|import)/i.test(message)) {
+          throw new Error("DSH 宿主端仍在运行旧版技能插件，请重启 DSH 后再导入配置");
+        }
+        throw new Error(message);
+      }
       return json;
+    }
+
+    /** 直接从浏览器已取得的技能列表生成迁移文件，避免旧宿主端缺少 /export 接口。 */
+    function createExportDocument(skills) {
+      return {
+        format: EXPORT_FORMAT,
+        formatVersion: EXPORT_FORMAT_VERSION,
+        plugin: PLUGIN_ID,
+        pluginVersion: PLUGIN_VERSION,
+        exportedAt: new Date().toISOString(),
+        secretPolicy: "no-managed-credentials",
+        contentPolicy: "full-skill-content",
+        items: skills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          whenToUse: skill.whenToUse,
+          interpreter: skill.interpreter,
+          modelInvocable: skill.modelInvocable,
+          userInvocable: skill.userInvocable,
+          enabled: skill.enabled,
+          content: skill.content,
+          scripts: Array.isArray(skill.scripts) ? skill.scripts.map((script) => ({ name: script.name, code: script.code })) : [],
+          refs: Array.isArray(skill.refs) ? skill.refs.map((ref) => ({ ...ref })) : []
+        }))
+      };
+    }
+
+    function downloadDocument(documentValue, prefix) {
+      const date = new Date();
+      const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}-${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}`;
+      const blob = new Blob([JSON.stringify(documentValue, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${prefix}-${stamp}.dshconfig.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function readConfigFile(file) {
+      if (!file) throw new Error("请选择要导入的配置文件");
+      if (file.size > 10 * 1024 * 1024) throw new Error("配置文件不能超过 10 MB");
+      try {
+        return JSON.parse(await file.text());
+      } catch {
+        throw new Error("配置文件不是合法的 JSON（结构化数据）文件");
+      }
     }
 
     // ---------- 样式 ----------
 
     const styles = {
-      root: { display: "flex", flexDirection: "column", gap: 14, padding: "16px 20px", maxWidth: 1080, fontFamily: "inherit", color: "var(--dsw-alias-label-primary)" },
-      head: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 },
+      root: { display: "flex", flexDirection: "column", gap: 14, padding: "10px 4px 20px", width: "100%", minWidth: 0, boxSizing: "border-box", fontFamily: "inherit", color: "var(--dsw-alias-label-primary)" },
+      head: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
       title: { fontSize: 16, fontWeight: 600, margin: 0 },
       muted: { color: "var(--dsw-alias-label-secondary)", fontSize: 12, lineHeight: 1.6 },
       list: { display: "flex", flexDirection: "column", gap: 8 },
-      row: { display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: 8 },
+      row: { display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: 8, flexWrap: "wrap" },
       rowMain: { flex: 1, minWidth: 0 },
       skillName: { fontWeight: 600 },
       skillNameOff: { fontWeight: 600, textDecoration: "line-through", opacity: 0.55 },
@@ -74,6 +134,10 @@ window.__ModuleLoader__.load({
       boxHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
       refRow: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" },
       refTag: { fontSize: 11, color: "var(--dsw-alias-label-secondary)" },
+      transfer: { display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: 8, background: "var(--dsw-alias-bg-layer-1)", flexWrap: "wrap" },
+      transferGrow: { flex: 1, minWidth: 160 },
+      compactSelect: { background: "var(--dsw-alias-bg-layer-2)", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: 6, padding: "5px 8px", color: "inherit", fontSize: 12 },
+      ok: { color: "var(--dsw-alias-state-success-primary, #2e8b57)", fontSize: 12, lineHeight: 1.6 },
     };
 
     function Toggle({ on, onToggle, title }) {
@@ -94,12 +158,19 @@ window.__ModuleLoader__.load({
       const [apis, setApis] = useState([]);
       const [editing, setEditing] = useState(null);
       const [error, setError] = useState("");
+      const [notice, setNotice] = useState("");
       const [busy, setBusy] = useState(false);
       const [confirmDel, setConfirmDel] = useState(null);
+      const [selectedNames, setSelectedNames] = useState([]);
+      const [conflictPolicy, setConflictPolicy] = useState("skip");
+      const importInputRef = useRef(null);
 
       const refresh = async () => {
         try {
-          setSkills((await api("/list")).skills ?? []);
+          const next = (await api("/list")).skills ?? [];
+          setSkills(next);
+          const availableNames = new Set(next.map((skill) => skill.name));
+          setSelectedNames((current) => current.filter((name) => availableNames.has(name)));
         } catch (e) {
           setError(e && e.message ? e.message : String(e));
         }
@@ -117,6 +188,7 @@ window.__ModuleLoader__.load({
       const doSave = async (rec, oldName) => {
         setBusy(true);
         setError("");
+        setNotice("");
         try {
           const res = await api("/save", { record: rec, oldName });
           setEditing(null);
@@ -134,6 +206,7 @@ window.__ModuleLoader__.load({
         setConfirmDel(null);
         setBusy(true);
         setError("");
+        setNotice("");
         try {
           await api("/remove", { name });
           await refresh();
@@ -152,6 +225,7 @@ window.__ModuleLoader__.load({
         }
         setBusy(true);
         setError("");
+        setNotice("");
         try {
           const res = await api("/save", { record: next, oldName: rec.name });
           await refresh();
@@ -169,7 +243,62 @@ window.__ModuleLoader__.load({
         content: "", scripts: [], refs: []
       });
 
+      const toggleSelected = (name) => {
+        setSelectedNames((current) => current.includes(name)
+          ? current.filter((item) => item !== name)
+          : current.concat(name));
+      };
+
+      const allSelected = skills.length > 0 && skills.every((skill) => selectedNames.includes(skill.name));
+      const toggleAll = () => setSelectedNames(allSelected ? [] : skills.map((skill) => skill.name));
+
+      const doExport = () => {
+        if (selectedNames.length === 0) return;
+        setError("");
+        setNotice("");
+        try {
+          const selectedSet = new Set(selectedNames);
+          const selectedSkills = skills.filter((skill) => selectedSet.has(skill.name));
+          if (selectedSkills.length === 0) throw new Error("没有找到可导出的技能");
+          downloadDocument(createExportDocument(selectedSkills), "dsh-skill-manager");
+          setNotice(`已导出 ${selectedSkills.length} 个技能。文件包含完整技能正文、脚本和能力引用，不包含 API 密钥或数据库密码。`);
+        } catch (e) {
+          setError(e && e.message ? e.message : String(e));
+        }
+      };
+
+      const doImport = async (event) => {
+        const file = event.target.files && event.target.files[0];
+        event.target.value = "";
+        if (!file) return;
+        setBusy(true);
+        setError("");
+        setNotice("");
+        try {
+          const documentValue = await readConfigFile(file);
+          const data = await api("/import", { document: documentValue, conflictPolicy });
+          await refresh();
+          setSelectedNames([]);
+          const summary = data.summary || {};
+          const importedNames = Array.isArray(data.importedNames) ? data.importedNames : [];
+          const nameText = importedNames.length > 0 ? ` 本次写入：${importedNames.join("、")}。` : "";
+          setNotice(`导入完成：新增 ${summary.imported ?? 0} 个，覆盖 ${summary.replaced ?? 0} 个，副本 ${summary.copied ?? 0} 个，跳过 ${summary.skipped ?? 0} 个。${nameText}请确认目标环境已配置技能引用的同名 API 工具和数据库连接。`);
+        } catch (e) {
+          setError(e && e.message ? e.message : String(e));
+        } finally {
+          setBusy(false);
+        }
+      };
+
       const row = (rec) => h("div", { key: rec.name, style: styles.row },
+        h("input", {
+          type: "checkbox",
+          checked: selectedNames.includes(rec.name),
+          disabled: busy,
+          title: `选择技能 ${rec.name}`,
+          "aria-label": `选择技能 ${rec.name}`,
+          onChange: () => toggleSelected(rec.name)
+        }),
         h("div", { style: styles.rowMain },
           h("div", { style: rec.enabled ? styles.skillName : styles.skillNameOff }, rec.name),
           h("div", { style: styles.desc }, rec.description)
@@ -336,12 +465,37 @@ window.__ModuleLoader__.load({
           ),
           editing === null ? h("button", { style: styles.btnPrimary, onClick: startNew }, "+ 新建技能") : null
         ),
+        editing === null ? h("div", { style: styles.transfer },
+          h("label", { style: styles.check },
+            h("input", { type: "checkbox", checked: allSelected, disabled: skills.length === 0 || busy, onChange: toggleAll }),
+            "全选"
+          ),
+          h("span", { style: { ...styles.muted, ...styles.transferGrow } }, selectedNames.length > 0 ? `已选 ${selectedNames.length} 项` : "选择要迁移的技能"),
+          h("label", { style: styles.check },
+            "导入冲突",
+            h("select", { style: styles.compactSelect, value: conflictPolicy, disabled: busy, onChange: (event) => setConflictPolicy(event.target.value) },
+              h("option", { value: "skip" }, "跳过已有项"),
+              h("option", { value: "replace" }, "覆盖已有项"),
+              h("option", { value: "copy" }, "创建导入副本")
+            )
+          ),
+          h("input", {
+            ref: importInputRef,
+            type: "file",
+            accept: ".json,.dshconfig.json,application/json",
+            style: { display: "none" },
+            onChange: doImport
+          }),
+          h("button", { style: styles.btn, disabled: busy, onClick: () => importInputRef.current?.click() }, busy ? "处理中…" : "导入配置"),
+          h("button", { style: styles.btnPrimary, disabled: selectedNames.length === 0 || busy, onClick: doExport }, `导出选中${selectedNames.length > 0 ? `（${selectedNames.length}）` : ""}`)
+        ) : null,
         error ? h("div", { style: styles.error }, error) : null,
+        notice ? h("div", { style: styles.ok }, notice) : null,
         editing !== null ? form() : null,
         skills.length === 0 && editing === null
           ? h("div", { style: styles.empty }, "还没有自定义技能，点击「新建技能」开始。")
           : editing === null ? h("div", { style: styles.list }, skills.map(row)) : null,
-        h("div", { style: styles.note }, "技能持久化到 ~/.dsh/skills/，配置后立即生效。正文中可直接指引模型调用任意插件工具。")
+        h("div", { style: styles.note }, "技能持久化到 ~/.dsh/skills/，配置后立即生效。迁移文件包含完整技能正文、脚本和能力引用；导入后需确认目标环境存在同名 API 工具与数据库连接。")
       );
     }
 

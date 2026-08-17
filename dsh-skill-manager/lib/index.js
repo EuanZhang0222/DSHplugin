@@ -8,7 +8,7 @@
  * 3. 支持技能正文用 @技能名 引用其他技能（递归展开，循环防护，禁用技能不参与引用）。
  * 4. 支持技能内嵌 Python 脚本（可配解释器命令），注入正文由模型按需执行。
  * 5. 支持「能力引用」：接口工具 / 数据库表 / SQL 命令，渲染时展开成调用指引。
- * 6. 提供 /api/dsh-skill-manager HTTP API（list / save / remove / catalog）。
+ * 6. 提供 /api/dsh-skill-manager HTTP API（list / save / remove / catalog / export / import）。
  *
  * 设计取舍：技能文件走 $DSH_HOME/skills/ 文件持久化而不是 settings 命名空间，是为了
  * 让本插件只依赖 skills + webServer（安装门槛低），且技能文件本身是 DSH 标准 skill
@@ -29,6 +29,11 @@ import { join } from 'node:path'
 const API_PREFIX = '/api/dsh-skill-manager'
 const MAX_REF_DEPTH = 6
 const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const EXPORT_FORMAT = 'dsh-plugin-config'
+const EXPORT_FORMAT_VERSION = 1
+const PLUGIN_ID = 'dsh-skill-manager'
+const PLUGIN_VERSION = '1.0.0'
+const MAX_IMPORT_ITEMS = 200
 
 class ApiError extends Error {
   constructor(status, message) {
@@ -167,6 +172,180 @@ function apply(ctx) {
         content,
         scripts,
         refs,
+      }
+    }
+
+    // ---- 批量迁移 ----
+
+    /** 只导出技能配置本身；API 密钥和数据库密码由对应插件单独管理。 */
+    function toPortableRecord(record) {
+      return {
+        name: record.name,
+        description: record.description,
+        whenToUse: record.whenToUse,
+        interpreter: record.interpreter,
+        modelInvocable: record.modelInvocable,
+        userInvocable: record.userInvocable,
+        enabled: record.enabled,
+        content: record.content,
+        scripts: (record.scripts || []).map((script) => ({ name: script.name, code: script.code })),
+        refs: (record.refs || []).map((ref) => ({ ...ref })),
+      }
+    }
+
+    function createExportDocument(records) {
+      return {
+        format: EXPORT_FORMAT,
+        formatVersion: EXPORT_FORMAT_VERSION,
+        plugin: PLUGIN_ID,
+        pluginVersion: PLUGIN_VERSION,
+        exportedAt: new Date().toISOString(),
+        secretPolicy: 'no-managed-credentials',
+        contentPolicy: 'full-skill-content',
+        items: records.map(toPortableRecord),
+      }
+    }
+
+    function readImportDocument(value) {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new ApiError(400, '导入文件不是合法的 DSH 插件配置对象')
+      }
+      if (value.format !== EXPORT_FORMAT || value.formatVersion !== EXPORT_FORMAT_VERSION) {
+        throw new ApiError(400, '导入文件格式或版本不受支持')
+      }
+      if (value.plugin !== PLUGIN_ID) {
+        throw new ApiError(400, '该文件不是技能插件的配置包')
+      }
+      if (!Array.isArray(value.items)) throw new ApiError(400, '导入文件缺少 items 配置列表')
+      if (value.items.length === 0) throw new ApiError(400, '导入文件中没有可导入的技能')
+      if (value.items.length > MAX_IMPORT_ITEMS) throw new ApiError(400, `单次最多导入 ${MAX_IMPORT_ITEMS} 个技能`)
+      return value.items
+    }
+
+    function readConflictPolicy(value) {
+      return value === 'replace' || value === 'copy' ? value : 'skip'
+    }
+
+    function uniqueSkillName(base, usedNames) {
+      let candidate = `${base}-copy`
+      let index = 2
+      while (usedNames.has(candidate)) {
+        candidate = `${base}-copy-${index}`
+        index += 1
+      }
+      return candidate
+    }
+
+    /** 创建副本时同步改写同一批次中的 @技能名，避免副本仍错误引用目标环境旧技能。 */
+    function rewriteSkillRefs(content, renameMap) {
+      if (renameMap.size === 0) return content
+      return content.replace(/(^|[^a-zA-Z0-9@])@([a-z0-9]+(?:-[a-z0-9]+)*)(?![a-zA-Z0-9:-])/g, (whole, prefix, name) => {
+        const renamed = renameMap.get(name)
+        return renamed ? `${prefix}@${renamed}` : whole
+      })
+    }
+
+    /**
+     * 先严格校验整份文件，再计算本轮写入项；任何一项无效都会终止整次导入。
+     * 技能以 name 为唯一标识，因此冲突判断和替换均只基于 name。
+     */
+    function mergeImportedSkills(existingRecords, rawItems, policy) {
+      const parsed = rawItems.map((item, index) => {
+        try {
+          return validate(item)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          throw new ApiError(400, `第 ${index + 1} 个技能无效：${message}`)
+        }
+      })
+
+      const duplicateNames = new Set()
+      const importedNames = new Set()
+      for (const record of parsed) {
+        if (importedNames.has(record.name)) duplicateNames.add(record.name)
+        importedNames.add(record.name)
+      }
+      if (duplicateNames.size > 0) {
+        throw new ApiError(400, `导入文件包含重复技能名：${[...duplicateNames].join('、')}`)
+      }
+
+      const existingNames = new Set(existingRecords.map((record) => record.name))
+      const usedNames = new Set(existingNames)
+      const renameMap = new Map()
+      if (policy === 'copy') {
+        for (const record of parsed) {
+          if (existingNames.has(record.name)) {
+            const copyName = uniqueSkillName(record.name, usedNames)
+            renameMap.set(record.name, copyName)
+            usedNames.add(copyName)
+          } else {
+            usedNames.add(record.name)
+          }
+        }
+      }
+
+      const writes = []
+      const summary = { imported: 0, replaced: 0, copied: 0, skipped: 0 }
+      const skipped = []
+
+      for (const input of parsed) {
+        const conflict = existingNames.has(input.name)
+        if (conflict && policy === 'skip') {
+          summary.skipped += 1
+          skipped.push({ name: input.name, reason: '同名技能已存在' })
+          continue
+        }
+
+        let record = {
+          ...input,
+          content: rewriteSkillRefs(input.content, renameMap),
+          scripts: input.scripts.map((script) => ({ ...script })),
+          refs: input.refs.map((ref) => ({ ...ref })),
+        }
+
+        if (conflict && policy === 'copy') {
+          record = {
+            ...record,
+            name: renameMap.get(input.name),
+            description: `${record.description}（导入副本）`,
+          }
+          summary.copied += 1
+        } else if (conflict && policy === 'replace') {
+          summary.replaced += 1
+        } else {
+          summary.imported += 1
+        }
+        writes.push(record)
+      }
+
+      return { writes, summary, skipped }
+    }
+
+    /** 批量写文件；若任一写入失败，恢复本轮涉及文件的导入前内容。 */
+    function persistImportedRecords(records) {
+      if (records.length === 0) return
+      const dir = skillsDir()
+      mkdirSync(dir, { recursive: true })
+      const payloads = records.map((record) => ({
+        file: join(dir, record.name + '.md'),
+        text: serialize(record),
+      }))
+      const backups = payloads.map(({ file }) => ({
+        file,
+        existed: existsSync(file),
+        text: existsSync(file) ? readFileSync(file, 'utf8') : '',
+      }))
+      try {
+        for (const payload of payloads) writeFileSync(payload.file, payload.text, 'utf8')
+      } catch (error) {
+        for (const backup of backups) {
+          try {
+            if (backup.existed) writeFileSync(backup.file, backup.text, 'utf8')
+            else rmSync(backup.file, { force: true })
+          } catch { /* 尽力回滚，保留原始错误 */ }
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        throw new ApiError(500, `导入文件写入失败，本次变更已回滚：${message}`)
       }
     }
 
@@ -504,6 +683,33 @@ function apply(ctx) {
         deleteSkillFile(name)
         rebuildAll()
         sendJson(res, 200, { ok: true })
+        return
+      }
+
+      if (method === 'POST' && sub === 'export') {
+        const names = Array.isArray(body.names) ? body.names.map((name) => String(name)) : []
+        if (names.length === 0) throw new ApiError(400, '请至少选择一个技能再导出')
+        const nameSet = new Set(names)
+        const selected = [...state.values()].map((entry) => entry.record).filter((record) => nameSet.has(record.name))
+        if (selected.length === 0) throw new ApiError(400, '没有找到可导出的技能')
+        sendJson(res, 200, { ok: true, document: createExportDocument(selected) })
+        return
+      }
+
+      if (method === 'POST' && sub === 'import') {
+        const items = readImportDocument(body.document)
+        const policy = readConflictPolicy(body.conflictPolicy)
+        const existing = [...state.values()].map((entry) => entry.record)
+        const result = mergeImportedSkills(existing, items, policy)
+        persistImportedRecords(result.writes)
+        for (const record of result.writes) state.set(record.name, { record, disposer: null })
+        rebuildAll()
+        sendJson(res, 200, {
+          ok: true,
+          summary: result.summary,
+          skipped: result.skipped,
+          importedNames: result.writes.map((record) => record.name),
+        })
         return
       }
 

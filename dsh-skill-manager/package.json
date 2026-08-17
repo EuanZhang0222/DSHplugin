@@ -1,7 +1,7 @@
 {
   "name": "dsh-skill-manager",
   "version": "1.0.0",
-  "description": "DSH 技能管理器：在设置页自定义技能（正文 + Python 脚本 + @技能名 互调 + 引用接口/数据库/SQL），配置后立即生效并持久化到 ~/.dsh/skills/",
+  "description": "DSH 技能管理器：自定义技能、批量导入导出、正文与脚本、@技能名互调及接口/数据库/SQL 引用，配置后立即生效并持久化到 ~/.dsh/skills/",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
