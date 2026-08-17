@@ -1,7 +1,7 @@
 {
   "name": "dsh-skin-manager",
   "version": "1.0.0",
-  "description": "DSH 皮肤管理器：内置默认皮肤与黑神话·悟空皮肤，支持皮肤文件的导入/校验/安装、选择切换与卸载",
+  "description": "DSH 皮肤管理器：内置默认与黑神话·悟空皮肤，支持皮肤导入/校验/切换/卸载及聚合弹窗自适应布局",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

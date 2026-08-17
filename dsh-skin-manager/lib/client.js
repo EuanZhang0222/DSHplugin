@@ -185,17 +185,37 @@ window.__ModuleLoader__.load({
     // 设置页「皮肤」分区。
     // -------------------------------------------------------------------------
     const S = {
-      wrap: { padding: "24px 28px", maxWidth: 760, color: "var(--dsw-alias-label-primary)" },
+      wrap: {
+        display: "flex",
+        flexDirection: "column",
+        width: "100%",
+        minWidth: 0,
+        minHeight: "100%",
+        padding: "10px 4px 20px",
+        boxSizing: "border-box",
+        color: "var(--dsw-alias-label-primary)",
+      },
       title: { fontSize: 18, fontWeight: 600, margin: "0 0 4px" },
-      subtitle: { fontSize: 13, opacity: 0.65, margin: "0 0 20px" },
+      subtitle: { fontSize: 13, opacity: 0.65, margin: "0 0 16px" },
+      catalog: {
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))",
+        alignItems: "stretch",
+        gap: 10,
+        width: "100%",
+        minWidth: 0,
+      },
       card: {
-        display: "flex", alignItems: "center", gap: 14,
-        padding: "14px 16px", marginBottom: 10,
+        display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+        minWidth: 0, height: "100%", boxSizing: "border-box",
+        padding: "14px 16px",
         borderRadius: 10,
         border: "1px solid var(--dsw-alias-border-l2)",
         background: "var(--dsw-alias-bg-layer-1)",
       },
-      cardBody: { flex: 1, minWidth: 0 },
+      cardBody: { flex: "1 1 220px", minWidth: 0 },
+      cardHead: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
+      cardActions: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", marginLeft: "auto" },
       cardName: { fontSize: 15, fontWeight: 600, margin: "0 0 3px" },
       cardDesc: { fontSize: 12.5, opacity: 0.7, margin: 0, lineHeight: 1.5 },
       cardMeta: { fontSize: 12, opacity: 0.5, margin: "3px 0 0" },
@@ -227,7 +247,8 @@ window.__ModuleLoader__.load({
         whiteSpace: "nowrap",
       },
       importBox: {
-        marginTop: 18, padding: "16px", borderRadius: 10,
+        width: "100%", minWidth: 0, boxSizing: "border-box",
+        marginTop: 16, padding: "16px", borderRadius: 10,
         border: "1px dashed var(--dsw-alias-border-l2)",
         background: "var(--dsw-alias-bg-layer-1)",
       },
@@ -299,24 +320,30 @@ window.__ModuleLoader__.load({
       return React.createElement("div", { style: S.wrap },
         React.createElement("h2", { style: S.title }, "皮肤"),
         React.createElement("p", { style: S.subtitle }, "选择外观皮肤；也可以通过 .dshskin 皮肤文件安装新皮肤。"),
-        skins.map((skin) =>
-          React.createElement("div", { key: skin.id, style: S.card },
-            React.createElement("div", { style: S.cardBody },
-              React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
-                React.createElement("span", { style: S.cardName }, skin.name),
-                skin.builtin ? React.createElement("span", { style: Object.assign({}, S.badge, { background: "rgba(255,255,255,0.08)", borderColor: "var(--dsw-alias-border-l2)", color: "var(--dsw-alias-label-secondary)" }) }, "内置") : null,
-                snap.active === skin.id ? React.createElement("span", { style: S.badge }, "使用中") : null,
+        React.createElement("div", { style: S.catalog },
+          skins.map((skin) =>
+            React.createElement("div", { key: skin.id, style: S.card },
+              React.createElement("div", { style: S.cardBody },
+                React.createElement("div", { style: S.cardHead },
+                  React.createElement("span", { style: S.cardName }, skin.name),
+                  skin.builtin ? React.createElement("span", { style: Object.assign({}, S.badge, { background: "rgba(255,255,255,0.08)", borderColor: "var(--dsw-alias-border-l2)", color: "var(--dsw-alias-label-secondary)" }) }, "内置") : null,
+                  snap.active === skin.id ? React.createElement("span", { style: S.badge }, "使用中") : null,
+                ),
+                skin.description ? React.createElement("p", { style: S.cardDesc }, skin.description) : null,
+                React.createElement("p", { style: S.cardMeta },
+                  (skin.author ? skin.author + " · " : "") + "v" + (skin.version || "?")),
               ),
-              skin.description ? React.createElement("p", { style: S.cardDesc }, skin.description) : null,
-              React.createElement("p", { style: S.cardMeta },
-                (skin.author ? skin.author + " · " : "") + "v" + (skin.version || "?")),
+              snap.active === skin.id && skin.builtin
+                ? null
+                : React.createElement("div", { style: S.cardActions },
+                  snap.active === skin.id
+                    ? null
+                    : React.createElement("button", { style: S.btn, disabled: busy, onClick: () => select(skin.id) }, "使用"),
+                  !skin.builtin
+                    ? React.createElement("button", { style: S.danger, disabled: busy, onClick: () => uninstall(skin.id, skin.name) }, confirmId === skin.id ? "确认卸载？" : "卸载")
+                    : null,
+                ),
             ),
-            snap.active === skin.id
-              ? null
-              : React.createElement("button", { style: S.btn, disabled: busy, onClick: () => select(skin.id) }, "使用"),
-            !skin.builtin
-              ? React.createElement("button", { style: S.danger, disabled: busy, onClick: () => uninstall(skin.id, skin.name) }, confirmId === skin.id ? "确认卸载？" : "卸载")
-              : null,
           ),
         ),
         React.createElement("div", { style: S.importBox },
