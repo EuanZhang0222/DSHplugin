@@ -8,6 +8,7 @@ HTTP API 配置成 **Agent 可调用的工具**——Agent 在合适的时候按
 
 - 第三方 API 工具的增删改查（CRUD），自定义名称、系统工具标识、调用时机（purpose）；
 - 两种接入方式：手动配置，或「粘贴 cURL」一键解析方法 / 地址 / Bearer 认证 / Body 参数；
+  支持无协议地址并自动补 HTTPS，也会保留 19 位 Long/Int64（长整数）标识的每一位；
 - 支持 GET / POST / PUT / PATCH / DELETE，路径变量 `{name}`、Query / Header / Body 参数；
 - 参数定义：位置、类型、值来源（Agent 输入 / 固定值 / 凭据引用 / 默认值）、必填、中文说明；
 - 数组（元素为对象）/ 对象参数支持递归子字段，手动配置与 cURL 导入均能表达嵌套结构；
@@ -48,7 +49,7 @@ HTTP API 配置成 **Agent 可调用的工具**——Agent 在合适的时候按
 > Node 22 + pnpm 11（详见 CHANGELOG「安装实测」）。
 
 ```bash
-dsh plugin --profile web add ./deepseek-ai-dsh-api-tools-1.0.0.tgz
+dsh plugin --profile web add ./deepseek-ai-dsh-api-tools-1.0.1.tgz
 # 然后重启 dsh web
 ```
 

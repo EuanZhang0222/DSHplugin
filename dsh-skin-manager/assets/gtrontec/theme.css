@@ -1,0 +1,38 @@
+:root[data-gtrontec] { color-scheme: light !important; }
+
+/* 原生背景永远在正文之下，不增加浮层和弹窗堆叠上下文。 */
+:root[data-gtrontec] [data-phase]:has(> [data-conversation-scroll]) {
+  background-image: linear-gradient(rgba(248, 250, 255, 0.955), rgba(248, 250, 255, 0.955)), url("/dsh-skin-manager/gtrontec/logo-zh.png");
+  background-position: center, right 40px bottom 38px;
+  background-size: 100% 100%, min(36%, 340px) auto;
+  background-repeat: no-repeat;
+}
+:root[data-gtrontec] [data-phase] [class*="previewBadge"] { display: none !important; }
+:root[data-gtrontec] [data-phase] [class*="headline"]:not([class*="headlineText"]) { grid-template-columns: 34px auto; }
+:root[data-gtrontec] [data-phase] [class*="headlineText"] { color: #17254b; font-weight: 600; }
+:root[data-gtrontec] [data-composer-card] {
+  background: #fff !important;
+  border: 1px solid #cbd6f3 !important;
+  box-shadow: 0 8px 32px rgba(41, 45, 205, 0.065);
+}
+:root[data-gtrontec] [data-composer-card]:focus-within {
+  border-color: var(--gtrontec-accent) !important;
+  box-shadow: 0 0 0 2px rgba(3, 150, 253, 0.09), 0 8px 32px rgba(41, 45, 205, 0.065);
+}
+:root[data-gtrontec] [data-conversation-scroll] { background: transparent; }
+:root[data-gtrontec] [data-phase] [class*="heroGlow"] { opacity: 0.35; }
+.gtrontec-mark { display: inline-block; flex: none; object-fit: contain; }
+.gtrontec-name { display: inline-flex; flex-direction: column; gap: 1px; line-height: 1.15; min-width: 0; color: #292dcd; }
+.gtrontec-name strong { font-size: 14px; letter-spacing: 0.015em; font-weight: 750; }
+.gtrontec-name small { font-size: 10px; letter-spacing: 0.09em; color: #526185; }
+@media (max-width: 600px) {
+  :root[data-gtrontec] [data-phase]:has(> [data-conversation-scroll]) {
+    background-image: linear-gradient(rgba(248, 250, 255, 0.965), rgba(248, 250, 255, 0.965)), url("/dsh-skin-manager/gtrontec/logo-zh.png");
+    background-position: center, right 16px bottom 20px;
+    background-size: 100% 100%, 46% auto;
+  }
+  :root[data-gtrontec] [data-phase] [class*="headlineText"] { font-size: 22px; }
+}
+@media print {
+  :root[data-gtrontec] [data-phase]:has(> [data-conversation-scroll]) { background-image: none; }
+}

@@ -1,0 +1,52 @@
+{
+  "date": "2026-09-07",
+  "hostVersion": "0.1.3-alpha.1",
+  "nodeVersion": "24.19.0",
+  "plugins": [
+    {
+      "directory": "dsh-my-plugins",
+      "name": "dsh-my-plugins",
+      "version": "1.0.0",
+      "file": "dsh-my-plugins-1.0.0.tgz",
+      "sha256": "b7acc44809d4bda964748f125b341ad5bd6cc889e73d9ae6d508da892a50c710",
+      "size": 7361,
+      "files": 5
+    },
+    {
+      "directory": "dsh-skill-manager",
+      "name": "dsh-skill-manager",
+      "version": "1.0.0",
+      "file": "dsh-skill-manager-1.0.0.tgz",
+      "sha256": "86b721b5a10a4ce84e77a888d88acfdfccc841c0403be10689667b8a9bd62513",
+      "size": 18634,
+      "files": 5
+    },
+    {
+      "directory": "dsh-skin-manager",
+      "name": "dsh-skin-manager",
+      "version": "1.2.0",
+      "file": "dsh-skin-manager-1.2.0.tgz",
+      "sha256": "149b95067bfca26ccf8f93c06bb3e4dfdb7e20de300d6dd7c7c3bcc000ffec7a",
+      "size": 1237239,
+      "files": 19
+    },
+    {
+      "directory": "dsh-api-tools",
+      "name": "@deepseek-ai/dsh-api-tools",
+      "version": "1.0.2",
+      "file": "deepseek-ai-dsh-api-tools-1.0.2.tgz",
+      "sha256": "1ce54a1adf76eb1b06469d4cb89e8c2fa42eb559235f1e17218abd01e79f3da6",
+      "size": 29061,
+      "files": 6
+    },
+    {
+      "directory": "database",
+      "name": "@deepseek-ai/dsh-database-connections",
+      "version": "2.1.0",
+      "file": "deepseek-ai-dsh-database-connections-2.1.0.tgz",
+      "sha256": "703a1b36b5825283ff0084f7b0bf91417a9638ba5e120e0e2ba9470ad603ba3d",
+      "size": 162422,
+      "files": 48
+    }
+  ]
+}

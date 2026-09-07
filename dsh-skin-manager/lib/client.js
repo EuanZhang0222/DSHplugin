@@ -7,6 +7,168 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const { useState, useEffect, useRef } = React;
 
+    const OCTACARBON_ASSET = "/dsh-skin-manager/octacarbon/";
+    const PRODUCT_NAME = "OCTACARBON Harness";
+    const WELCOME_TEXT = "欢迎使用能碳大脑";
+
+    // 标识使用原始 PNG 的第一个章鱼字母 O，通过 SVG 视窗展示，不改原图像素。
+    function OctacarbonMark({ size = 24, className = "" }) {
+      return React.createElement("svg", {
+        width: size, height: size, viewBox: "-25 0 260 260",
+        className: "octacarbon-mark " + className,
+        role: "img", "aria-label": "能碳章鱼标识", "data-octacarbon-mark": "",
+      }, React.createElement("svg", { width: 210, height: 260, overflow: "hidden" }, React.createElement("image", {
+        href: OCTACARBON_ASSET + "logo-en.png", width: 1847, height: 260,
+      })));
+    }
+
+    function OctacarbonName() {
+      return React.createElement("span", { className: "octacarbon-name", "aria-label": PRODUCT_NAME },
+        React.createElement("strong", null, "OCTACARBON"),
+        React.createElement("small", null, "Harness"));
+    }
+
+    function GtrontecMark({ size = 24, className = "" }) {
+      return React.createElement("img", {
+        src: "/dsh-skin-manager/gtrontec/favicon.svg", width: size, height: size,
+        className: "gtrontec-mark " + className, alt: "格创东智标识", "data-gtrontec-mark": "",
+      });
+    }
+
+    function GtrontecName() {
+      return React.createElement("span", { className: "gtrontec-name", "aria-label": "Gtrontec Harness" },
+        React.createElement("strong", null, "Gtrontec"),
+        React.createElement("small", null, "Harness"));
+    }
+
+    // 品牌行为只能由本插件内置配置触发；导入皮肤仍只接受颜色、样式和背景。
+    const BRANDS = Object.freeze({
+      octacarbon: { id: "octacarbon", productName: PRODUCT_NAME, asset: OCTACARBON_ASSET,
+        Mark: OctacarbonMark, Name: OctacarbonName, preview: "logo-combined.png", alt: "能碳章鱼品牌标识" },
+      gtrontec: { id: "gtrontec", productName: "Gtrontec Harness", asset: "/dsh-skin-manager/gtrontec/",
+        Mark: GtrontecMark, Name: GtrontecName, preview: "logo-zh.png", alt: "格创东智品牌标识" },
+    });
+
+    function BrandPreview({ skin }) {
+      const brand = skin.builtin && Object.hasOwn(BRANDS, skin.id) ? BRANDS[skin.id] : null;
+      if (!brand) return null;
+      return React.createElement("div", {
+        style: { display: "flex", alignItems: "center", gap: 12, padding: 12, marginBottom: 12, borderRadius: 8, background: "#f0f4ff", color: "#17254b" },
+      }, React.createElement("img", { src: brand.asset + brand.preview, alt: brand.alt, style: { width: 130, maxWidth: "45%", height: "auto" } }),
+      React.createElement("span", { style: { fontSize: 12, lineHeight: 1.6 } }, WELCOME_TEXT));
+    }
+
+    // 仅取消产品预览声明步骤；不跳过模型配置、访问权限或任何确认步骤。
+    function NoPreviewNotice({ complete }) {
+      useEffect(() => { complete(); }, [complete]);
+      return null;
+    }
+
+    function replaceProductTitle(title, productName = PRODUCT_NAME) {
+      const separator = title.lastIndexOf(" — ");
+      const prefix = separator < 0 ? "" : title.slice(0, separator + 3);
+      const product = separator < 0 ? title : title.slice(separator + 3);
+      return /^(?:deepseek[ -]+harness|dsh(?: local build)?)$/i.test(product.trim())
+        ? prefix + productName : title;
+    }
+
+    function applyBrand(ctx, brand) {
+      const root = document.documentElement;
+      const attribute = "data-" + brand.id;
+      const favicon = brand.asset + "favicon.svg";
+      const oldAttribute = root.getAttribute(attribute);
+      root.setAttribute(attribute, "");
+      const disposers = [];
+
+      // 官方扩展点的优先级覆盖；撤销注册后，原品牌自动重新可见。
+      for (const [name, component, extra] of [
+        ["sidebar.brand.mark", brand.Mark, {}],
+        ["sidebar.brand.name", brand.Name, {}],
+        ["conversation.hero.brand.mark", brand.Mark, {}],
+        ["settings.onboarding", NoPreviewNotice, { id: "welcome-notice", order: -100 }],
+      ]) {
+        let off = null, mounting = false;
+        const mount = () => {
+          if (mounting) return;
+          mounting = true;
+          try {
+            if (ctx.slots.spec(name)) {
+              if (!off) off = ctx.slots.register({ name, ...extra, priority: -1000 }, component);
+            } else if (off) { const previous = off; off = null; previous(); }
+          } finally { mounting = false; }
+        };
+        const unsubscribe = ctx.slots.subscribe(name, mount);
+        disposers.push(() => { unsubscribe(); if (off) off(); });
+        mount();
+      }
+
+      // 宿主 rc.8 未提供标题/欢迎语插槽：只适配已核对的欢迎标题节点。
+      // 不扫描或替换消息、代码、输入框、模型名称与第三方插件业务内容。
+      const headlineSelector = '[data-phase] [class*="headlineText"]';
+      const textChanges = new Map();
+      let stopped = false;
+      function syncHeadlines(scope = document) {
+        const elements = [...scope.querySelectorAll(headlineSelector)];
+        if (scope.nodeType === 1 && scope.matches(headlineSelector)) elements.push(scope);
+        for (const el of elements) {
+          if (el.closest('[contenteditable="true"], textarea, pre, code')) continue;
+          const node = el.firstChild;
+          if (!node || node.nodeType !== 3 || el.childNodes.length !== 1) continue;
+          if (node.nodeValue !== WELCOME_TEXT) {
+            textChanges.set(node, node.nodeValue);
+            node.nodeValue = WELCOME_TEXT;
+          }
+        }
+        for (const node of textChanges.keys()) if (!node.isConnected) textChanges.delete(node);
+      }
+      const bodyObserver = new MutationObserver((records) => {
+        if (stopped) return;
+        for (const record of records) {
+          if (record.type === "characterData") {
+            if (record.target.parentElement?.matches(headlineSelector)) syncHeadlines(record.target.parentElement);
+          } else {
+            if (record.target.nodeType === 1 && record.target.matches(headlineSelector)) syncHeadlines(record.target);
+            for (const node of record.addedNodes) if (node.nodeType === 1) syncHeadlines(node);
+          }
+        }
+      });
+      bodyObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+      syncHeadlines();
+
+      let originalTitle = document.title, writtenTitle = null;
+      const syncTitle = () => {
+        if (stopped || document.title === writtenTitle) return;
+        const current = document.title;
+        const next = replaceProductTitle(current, brand.productName);
+        if (next !== current) { originalTitle = current; writtenTitle = next; document.title = next; }
+      };
+      const titleObserver = new MutationObserver(syncTitle);
+      titleObserver.observe(document.head, { subtree: true, childList: true, characterData: true });
+      syncTitle();
+
+      const icons = [...document.querySelectorAll('link[rel~="icon"]')];
+      let ownIcon = null;
+      if (!icons.length) { ownIcon = document.createElement("link"); ownIcon.rel = "icon"; document.head.append(ownIcon); icons.push(ownIcon); }
+      const iconChanges = icons.map(el => [el, el.getAttribute("href"), el.getAttribute("type")]);
+      for (const el of icons) { el.href = favicon; el.type = "image/svg+xml"; }
+
+      return () => {
+        stopped = true;
+        bodyObserver.disconnect(); titleObserver.disconnect();
+        for (const dispose of disposers.reverse()) dispose();
+        for (const [node, original] of textChanges) if (node.isConnected && node.nodeValue === WELCOME_TEXT) node.nodeValue = original;
+        textChanges.clear();
+        if (document.title === writtenTitle) document.title = originalTitle;
+        for (const [el, href, type] of iconChanges) {
+          if (el.getAttribute("href") !== favicon) continue;
+          if (href === null) el.removeAttribute("href"); else el.setAttribute("href", href);
+          if (type === null) el.removeAttribute("type"); else el.setAttribute("type", type);
+        }
+        if (ownIcon) ownIcon.remove();
+        if (oldAttribute === null) root.removeAttribute(attribute); else root.setAttribute(attribute, oldAttribute);
+      };
+    }
+
     // -------------------------------------------------------------------------
     // 皮肤管理器：单一运行时状态（皮肤目录 + 当前选中），通过闭包共享给
     // 设置页 UI 与背景浮层两处消费。
@@ -17,6 +179,8 @@ window.__ModuleLoader__.load({
       let ready = false;
       let cssEl = null;
       let tokenDispose = null;
+      let brandDispose = null;
+      let disposed = false;
       const listeners = new Set();
 
       function getSnapshot() {
@@ -32,6 +196,7 @@ window.__ModuleLoader__.load({
 
       // 应用/移除某个皮肤的外观：颜色令牌覆盖 + 自定义样式。
       function applySkin(skin) {
+        if (brandDispose) { brandDispose(); brandDispose = null; }
         if (tokenDispose) { try { tokenDispose(); } catch {} tokenDispose = null; }
         if (skin && skin.tokens && Object.keys(skin.tokens).length > 0) {
           const tokens = {};
@@ -47,10 +212,12 @@ window.__ModuleLoader__.load({
           cssEl.textContent = skin.css;
           document.head.append(cssEl);
         }
+        if (skin && skin.builtin && Object.hasOwn(BRANDS, skin.id)) brandDispose = applyBrand(ctx, BRANDS[skin.id]);
       }
 
       // 按 active 同步外观，并广播状态。
       function sync() {
+        if (disposed) return;
         const skin = skins.find((s) => s.id === active);
         applySkin(skin && skin.id !== "default" ? skin : null);
         emit();
@@ -60,7 +227,7 @@ window.__ModuleLoader__.load({
         try {
           const res = await fetch("/api/dsh-skins/state");
           const data = await res.json();
-          if (data && data.ok) {
+          if (data && data.ok && !disposed) {
             skins = data.skins || [];
             active = data.active || "default";
             ready = true;
@@ -110,7 +277,8 @@ window.__ModuleLoader__.load({
         sync();
       }
 
-      return { getSnapshot, subscribe, load, select, install, uninstall };
+      function dispose() { disposed = true; applySkin(null); listeners.clear(); }
+      return { getSnapshot, subscribe, load, select, install, uninstall, dispose };
     }
 
     // -------------------------------------------------------------------------
@@ -133,7 +301,7 @@ window.__ModuleLoader__.load({
       };
 
       if (bg.type === "video") {
-        return React.createElement(VideoLayer, { src: bg.src, brightness: bg.brightness, baseStyle });
+        return React.createElement(VideoLayer, { src: bg.src || bg.value, brightness: bg.brightness, baseStyle });
       }
       if (bg.type === "image" || bg.type === "url") {
         return React.createElement("div", {
@@ -223,7 +391,7 @@ window.__ModuleLoader__.load({
         display: "inline-block", padding: "2px 9px", borderRadius: 999,
         fontSize: 12, fontWeight: 600, whiteSpace: "nowrap",
         color: "var(--dsw-alias-button-primary-fill)",
-        background: "rgba(212, 176, 106, 0.12)",
+        background: "var(--dsw-alias-state-business-tertiary)",
         border: "1px solid var(--dsw-alias-button-primary-fill)",
       },
       btn: {
@@ -319,11 +487,12 @@ window.__ModuleLoader__.load({
 
       return React.createElement("div", { style: S.wrap },
         React.createElement("h2", { style: S.title }, "皮肤"),
-        React.createElement("p", { style: S.subtitle }, "选择外观皮肤；也可以通过 .dshskin 皮肤文件安装新皮肤。"),
+        React.createElement("p", { style: S.subtitle }, "选择外观皮肤，也可以导入皮肤文件安装新皮肤。"),
         React.createElement("div", { style: S.catalog },
           skins.map((skin) =>
             React.createElement("div", { key: skin.id, style: S.card },
               React.createElement("div", { style: S.cardBody },
+                React.createElement(BrandPreview, { skin }),
                 React.createElement("div", { style: S.cardHead },
                   React.createElement("span", { style: S.cardName }, skin.name),
                   skin.builtin ? React.createElement("span", { style: Object.assign({}, S.badge, { background: "rgba(255,255,255,0.08)", borderColor: "var(--dsw-alias-border-l2)", color: "var(--dsw-alias-label-secondary)" }) }, "内置") : null,
@@ -349,7 +518,7 @@ window.__ModuleLoader__.load({
         React.createElement("div", { style: S.importBox },
           React.createElement("div", { style: { fontWeight: 600, marginBottom: 6 } }, "新增皮肤"),
           React.createElement("p", { style: { fontSize: 12.5, opacity: 0.7, margin: "0 0 12px", lineHeight: 1.6 } },
-            "导入一个 .dshskin 皮肤文件（JSON）。文件需包含 schema、id、name、version、colorScheme，可选 tokens / css / background。详见插件 docs/皮肤文件格式规范.md。"),
+            "导入符合皮肤文件格式规范的 JSON（数据文件）。能碳章鱼、格创东智已内置于本插件，点击“使用”即可启用品牌外观。"),
           React.createElement("input", {
             ref: fileRef, type: "file", accept: ".dshskin,.json,application/json",
             style: { display: "none" }, onChange: onFile,
@@ -368,7 +537,7 @@ window.__ModuleLoader__.load({
       const manager = createManager(ctx);
 
       // 初次加载恢复已选皮肤。
-      ctx.effect(() => { void manager.load(); }, "dsh-skin-manager: initial load");
+      ctx.effect(() => { void manager.load(); return () => manager.dispose(); }, "dsh-skin-manager: initial load");
 
       // 背景浮层：随皮肤切换自动渲染/消失。
       ctx.slots.inject("shell.overlay", () => ctx.slots.register(

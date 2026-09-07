@@ -1,64 +1,66 @@
-# @deepseek-ai/dsh-database-connections
+# @deepseek-ai/dsh-database-connections 2.1.0
 
-为 DeepSeek Harness 增加数据库连接管理能力：在设置页左侧新增「数据库连接」页，
-支持 MySQL / ClickHouse 连接的增删改查、连接测试、以及只读数据查询。
+DeepSeek Harness（深度求索智能体工作台）的数据库统一语义层插件。插件在保留 MySQL（关系型数据库）和 ClickHouse（列式分析数据库）连接管理、测试、浏览与只读查询的基础上，增加数据集、统一语义概念、多业务关系拓扑、确定性规则识别、大模型辅助识别和安全 Agent Tool（智能体工具）。
 
-## 功能
+## 核心能力
 
-- 连接信息增删改查（CRUD），自定义连接名称；
-- MySQL（mysql2）与 ClickHouse（@clickhouse/client）真实连接与探活；
-- 测试连接通断（ClickHouse 走 `SELECT` 校验账号密码，MySQL 走 `ping`）；
-- 浏览数据库 / 表，执行只读查询（`SELECT / SHOW / DESCRIBE / EXPLAIN / WITH`，结果上限 200 行）；
-- 连接持久化到 DSH settings（`database-connections` 命名空间），密码以 `role('secret')` 标记、接口自动脱敏。
-- 支持勾选部分或全部连接，导出为 `.dshconfig.json` 配置包，并在另一套已安装本插件的
-  DSH 环境中批量导入；冲突时可选择「跳过已有项 / 覆盖已有项 / 创建导入副本」。
-- 导出包永远不包含数据库密码；导入后需要在目标环境补填密码。使用「覆盖已有项」时，
-  目标环境中原有的已保存密码会保留，不会被空密码覆盖。
+- 统一连接管理：MySQL 与 ClickHouse 使用同一套新增、查看、编辑、删除、测试、浏览、创建数据集和批量迁移操作。
+- 凭据保护：用户名与密码均以 `role('secret')`（密钥字段）存储，创建后不返回浏览器、不显示在卡片或详情中，也不进入导出包。
+- 真实数据集：基于已连接数据库的真实 `database.table`（数据库.表）创建，读取字段类型、可空性、默认值、主键/唯一键/索引、外键和数据库注释。
+- 逐级选表：自动加载连接下的数据库目录，再按库选择数据表；选表后自动带出字段定义，无需输入库名/表名，失败时可直接重试。
+- 业务语义：保存数据集名称、表用途、字段业务名称、自定义注释、统一语义概念、启用状态与敏感标记；同步结构时保留人工语义。
+- 多个关系拓扑：数百张表可以按业务主题拆分成多个拓扑；关系资产可复用，拓扑只维护引用。
+- 可解释规则引擎：100 分量化证据、硬阻断、规则版本和证据明细；可选脱敏去重值覆盖率计算。
+- 大模型辅助：通过 Harness `llm`（大模型）服务读取真实模型；只在当前拓扑字段白名单内返回候选，服务端再做确定性复核。
+- 人工纠错：候选关系可编辑、确认、拒绝和删除；只有人工确认关系进入发布语义上下文。
+- 跨插件调用：提供版本化 `databaseSemanticLayer`（数据库语义层）宿主服务和 5 个静态 Agent Tool（智能体工具）。
+- 按需上下文：目录/字段分页检索，按问题选取字段、补齐确认路径与中间表；预算超出明确提示，不静默截断业务说明。
+- 双模式预览：“按问题预览”显示本次选择和估算长度，可补选字段；“完整详情”保留全部公开资料，字段分页、重复解释折叠，结构化全文默认收起。
+- 分批识别：先规划跨表字段分片，每次由用户选择一批调用模型；不再静默取前80表/500字段。大拓扑可能批次很多，应按业务主题缩小范围。
+- 全量分页查询：其他插件和智能体可逐页获取全部符合条件的记录，200仅为每页最大行数；无总行数截断。一次只读查询流式缓存，签名游标连续读取，超长行无损分片；必须检查 `complete`（是否读完），失败不能当作全量完成。
+- 原型一致界面：连接管理、数据集和关系拓扑按已确认原型还原，所有颜色、边框和背景使用 Harness 皮肤变量，兼容浅色、深色和跟随系统。
 
-## 批量迁移
+## Agent Tool（智能体工具）
 
-1. 勾选要迁移的数据库连接，也可使用「选择全部数据库连接」。
-2. 点击「导出选中」，浏览器会下载 `dsh-database-connections-*.dshconfig.json`。
-3. 在目标 DSH 环境选择「导入冲突」策略，再点击「导入配置」。
-4. 导入完成后逐项补填密码并执行「测试连接」。
+| 工具标识 | 中文用途 |
+|---|---|
+| `list_database_datasets` | 分页检索已启用数据集及业务用途 |
+| `get_database_semantic_context` | 按问题获取有预算的精简语义，支持指定数据集和字段补查 |
+| `search_database_dataset_fields` | 分页检索指定数据集的公开字段 |
+| `find_database_join_path` | 在人工确认关系中寻找数据集关联路径 |
+| `query_database_dataset` | 对单个数据集执行字段白名单、参数化的真实只读查询 |
 
-配置包使用统一的 `dsh-plugin-config`（DSH 插件配置）格式，当前 `formatVersion`（格式版本）
-为 `1`。插件会校验文件类型、插件标识、格式版本、条目数量和单文件大小，不会静默覆盖已有项。
+工具不会输出数据库用户名、密码、敏感字段或未确认候选关系。跨数据库关系只用于理解与查询规划；插件不会假装数据库原生支持跨库联表执行。
 
-## 架构
+2026-08-27 按需上下文修订：服务版本1.1.0，保留旧完整服务/API形状；模型上下文工具改为带 `status`（结果状态）、`context`（精简内容）、`budget`（预算）的返回封套，调用方必须检查状态，不能再假设顶层存在 `dataset`。目录工具保留 `datasets`，新增分页；旧脚本不能忽略 `nextCursor`。详情请见设计文档第9节。单次默认6000估算Token（文本计量单位），不是精确计费或整个会话容量的保证。
 
-- **host 半部**（`src/index.ts` → `lib/index.js`）：settings 持久化 +
-  `/api/database-connections` HTTP API（列表 / 保存 / 删除 / 测试 / 数据库 / 表 / 查询 /
-  导入 / 导出）。
-- **client 半部**（`src/client/*` → `lib/client.js`）：注册 `settings.section`（id
-  `database-connections`），渲染连接管理 UI，经 `fetch` 调用 host API。
-- 包同时声明 `dsh.bundle`（供 `dsh plugin add` 安装）与 `dsh.client`（供浏览器 roster 扫描）。
+## 目录
+
+- `lib/index.js`：宿主入口、连接 API（接口）、语义 API（接口）、工具和服务注册。
+- `lib/client.js`：连接管理、数据集、关系拓扑三页浏览器界面。
+- `lib/semantic/`：元数据、规则、提示词校验、语义上下文、安全查询和运行时。
+- `lib/types/`：TypeScript（类型脚本）接口定义。
+- `tests/`：规则、查询、上下文和大模型输出边界测试。
+- `数据库统一语义层插件-安装说明.md`：安装、升级、回滚和验收步骤。
+- `数据库统一语义层插件-设计与识别规则说明.md`：设计逻辑、规则引擎和大模型识别规则。
+- `SOURCE-MANIFEST.md`：源文件职责清单。
 
 ## 安装
 
-```bash
-dsh plugin --profile web add ./deepseek-ai-dsh-database-connections-1.0.0.tgz
-# 然后重启 dsh web
+```powershell
+dsh plugin --profile web add "C:\path\deepseek-ai-dsh-database-connections-2.1.0.tgz"
 ```
 
-详见随包分发的安装说明。
+完成后重启 DeepSeek Harness。升级前必须备份旧安装包和 `database-connections` 设置文档。详见安装说明。
 
-## 开发与构建
+2.1.0 全量分页：安装包为 `deepseek-ai-dsh-database-connections-2.1.0.tgz`。服务版本1.2.0；`queryDataset`和智能体查询工具保留旧字段/过滤/排序/limit参数及rows返回项，新增cursor/nextCursor/complete等状态。旧调用方必须循环取页，不能把第一次返回的rows当作完整结果。全量指可查询字段与指定筛选范围，不突破敏感字段、数据库权限、运行资源或模型上下文窗口。详细协议见设计说明第10节。
 
-```bash
-# 依赖（mysql2 / @clickhouse/client 已在 package.json）
-pnpm --filter @deepseek-ai/dsh-database-connections install
+## 测试
 
-# 类型 + 打包（node-half + client bundle）
-pnpm exec tsc -b packages/database/database-connections/tsconfig.json
-pnpm --filter @deepseek-ai/dsh-database-connections run bundle
-
-# 打包为可分发 tarball
-pnpm --dir packages/database/database-connections pack --pack-destination <输出目录>
+```powershell
+npm test
+node --check lib/index.js
+node --check lib/client.js
 ```
 
-## 卸载
-
-```bash
-dsh plugin --profile web remove @deepseek-ai/dsh-database-connections
-```
+自动化测试不连接真实业务数据库；真实元数据和数据查询必须在目标环境使用最小权限只读账号验收。

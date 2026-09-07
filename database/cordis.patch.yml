@@ -5,10 +5,11 @@
 # （modules 的 node half 扫描 package.json 的 dsh.client 声明，把 lib/client.js
 # 加入浏览器 roster，在设置页左侧渲染"数据库连接"页）。
 #
-# inject 声明 host 半部的硬依赖：settings（连接列表持久化）与 webServer
-# （HTTP API 载体）。两者都由 web profile 的 bundle 层提供。
+# inject 声明 host 半部的硬依赖：settings（持久化）、webServer（HTTP API）
+# 和 tools（把数据集语义上下文与受控查询注册为 Agent 工具）。大模型识别所需
+# 的 llm 服务采用可选获取：未配置模型时规则引擎、手工关系和 Agent 查询仍可用。
 
 - insert:
     - id: database-connections
       name: '@deepseek-ai/dsh-database-connections'
-      inject: [settings, webServer]
+      inject: [settings, webServer, tools]

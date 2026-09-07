@@ -1,11 +1,14 @@
 {
   "name": "@deepseek-ai/dsh-api-tools",
   "description": "API tools plugin for DeepSeek Harness: turn third-party HTTP APIs into Agent-callable tools (data query / control commands) with CRUD, parameter mapping, authentication, and draft testing from the Settings page",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "publishConfig": {
     "access": "public"
   },
   "type": "module",
+  "scripts": {
+    "test": "node tests/api-tools-regression.test.mjs"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": {
@@ -28,7 +31,6 @@
   "dsh": {
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-settings-general"
       ],
       "platform": "web"

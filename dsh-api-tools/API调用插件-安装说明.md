@@ -11,7 +11,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `deepseek-ai-dsh-api-tools-1.0.0.tgz` | 插件压缩包（标准 npm tarball），可在任意 DSH 电脑上安装 |
+| `deepseek-ai-dsh-api-tools-1.0.1.tgz` | 插件压缩包（标准 npm tarball），可在任意 DSH 电脑上安装 |
 | 本说明文档 | 安装与使用指引 |
 
 ---
@@ -34,23 +34,23 @@
 
 ### 方式 A：命令行安装（推荐）
 
-1. 把 `deepseek-ai-dsh-api-tools-1.0.0.tgz` 复制到目标电脑（任意目录）。
+1. 把 `deepseek-ai-dsh-api-tools-1.0.1.tgz` 复制到目标电脑（任意目录）。
 
 2. 打开终端，切换到 DSH 安装目录（即含有 `apps/cli/lib/bin.js` 的目录），执行：
 
    ```bash
-   dsh plugin --profile web add ./deepseek-ai-dsh-api-tools-1.0.0.tgz
+   dsh plugin --profile web add ./deepseek-ai-dsh-api-tools-1.0.1.tgz
    ```
 
    或使用绝对路径：
 
    ```bash
-   dsh plugin --profile web add "C:/path/to/deepseek-ai-dsh-api-tools-1.0.0.tgz"
+   dsh plugin --profile web add "C:/path/to/deepseek-ai-dsh-api-tools-1.0.1.tgz"
    ```
 
    > 若 `dsh` 命令不在 PATH 中，可用等价的 node 调用：
    > ```bash
-   > node <DSH安装目录>/apps/cli/lib/bin.js plugin --profile web add ./deepseek-ai-dsh-api-tools-1.0.0.tgz
+   > node <DSH安装目录>/apps/cli/lib/bin.js plugin --profile web add ./deepseek-ai-dsh-api-tools-1.0.1.tgz
    > ```
 
 3. 安装完成后，插件会自动写入 web profile 的 bundle 清单。**重启 DSH**（关闭并重新

@@ -1,7 +1,7 @@
 {
   "name": "dsh-skin-manager",
-  "version": "1.0.0",
-  "description": "DSH 皮肤管理器：内置默认与黑神话·悟空皮肤，支持皮肤导入/校验/切换/卸载及聚合弹窗自适应布局",
+  "version": "1.2.0",
+  "description": "皮肤管理器：内置格创东智、能碳章鱼、默认与黑神话·悟空皮肤，支持品牌替换、皮肤导入/校验/切换/卸载",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -10,12 +10,14 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/client.js",
-    "assets/wukong-video.mp4",
+    "lib/*.js",
+    "assets/",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "皮肤文件格式规范.md",
+    "皮肤插件-安装说明.md"
   ],
+  "scripts": { "test": "node --test tests/*.test.mjs" },
   "dsh": {
     "client": {
       "platform": "web",

@@ -1,15 +1,18 @@
 import { randomUUID } from "node:crypto";
 import z from "@deepseek-ai/schemastery";
-import { settingsNamespace } from "@deepseek-ai/dsh-settings";
+
 import * as mysql from "mysql2/promise";
 import { createClient } from "@clickhouse/client";
+import { semanticConfigFields } from "./semantic/schema.js";
+import { createSemanticRuntime, SemanticApiError } from "./semantic/runtime.js";
+import { buildSemanticTools } from "./semantic/tools.js";
 //#region lib/types/index.js
 /**
 * 数据库连接插件 —— host 半部。
 *
 * 提供：
-* 1. 连接列表的持久化（settings namespace `database-connections`，密码走
-*    role('secret')，不会被 wire 层的 describe 泄露）。
+ * 1. 连接列表的持久化（settings namespace `database-connections`，用户名和密码走
+ *    role('secret')，不会被 wire 层的 describe 泄露）。
 * 2. /api/database-connections 前缀 HTTP API，供 client 端设置页调用：
 *    list / save / delete / test / databases / tables / query / export / import。
 * 3. 真实的 MySQL（mysql2）与 ClickHouse（@clickhouse/client）连接、探活与
@@ -26,13 +29,16 @@ const ConnectionSchema = z.object({
 	type: z.union([z.const("mysql"), z.const("clickhouse")]),
 	host: z.string().min(1),
 	port: z.number().min(1).max(65535),
-	username: z.string(),
+	username: z.string().role("secret"),
 	password: z.string().role("secret"),
 	database: z.string()
 });
 /** 配置节 schema。 */
-const ConfigSchema = z.object({ connections: z.array(ConnectionSchema) });
-const NAMESPACE = settingsNamespace("database-connections");
+const ConfigSchema = z.object({
+	connections: z.array(ConnectionSchema).default([]),
+	...semanticConfigFields
+});
+const NAMESPACE = "database-connections";
 const API_PREFIX = "/api/database-connections";
 const MAX_ROWS = 200;
 const TIMEOUT_MS = 15e3;
@@ -41,7 +47,7 @@ const MAX_IMPORT_ITEMS = 500;
 const EXPORT_FORMAT = "dsh-plugin-config";
 const EXPORT_FORMAT_VERSION = 1;
 const PLUGIN_ID = "@deepseek-ai/dsh-database-connections";
-const PLUGIN_VERSION = "1.0.0";
+const PLUGIN_VERSION = "2.0.0";
 /** 只读 SQL 白名单前缀。 */
 const READ_ONLY_PREFIX = /^\s*(select|show|describe|desc|explain|with)\b/i;
 /** 判断一个数据库类型是否为已知类型。 */
@@ -65,8 +71,8 @@ function toView(connection) {
 		type: connection.type,
 		host: connection.host,
 		port: connection.port,
-		username: connection.username,
 		database: connection.database,
+		hasUsername: connection.username.length > 0,
 		hasPassword: connection.password.length > 0
 	};
 }
@@ -127,9 +133,13 @@ function readConnection(input) {
 /** 已保存连接在前端不会回传密码；执行测试/查询时按 id 补回宿主端保存的密码。 */
 function readOperationalConnection(scope, input) {
 	const connection = readConnection(input);
-	if (connection.password.length > 0 || connection.id.length === 0) return connection;
+	if ((connection.password.length > 0 && connection.username.length > 0) || connection.id.length === 0) return connection;
 	const existing = scope.get().connections.find((item) => item.id === connection.id);
-	return existing === void 0 ? connection : { ...connection, password: existing.password };
+	return existing === void 0 ? connection : {
+		...connection,
+		username: connection.username.length > 0 ? connection.username : existing.username,
+		password: connection.password.length > 0 ? connection.password : existing.password
+	};
 }
 /** MySQL 连接工厂。 */
 async function withMySql(connection, run) {
@@ -254,14 +264,13 @@ function createExportDocument(connections) {
 		plugin: PLUGIN_ID,
 		pluginVersion: PLUGIN_VERSION,
 		exportedAt: new Date().toISOString(),
-		secretPolicy: "passwords-omitted",
+		secretPolicy: "credentials-omitted",
 		items: connections.map((connection) => ({
 			id: connection.id,
 			name: connection.name,
 			type: connection.type,
 			host: connection.host,
 			port: connection.port,
-			username: connection.username,
 			database: connection.database
 		}))
 	};
@@ -358,16 +367,38 @@ function mergeImportedConnections(existingConnections, rawItems, policy) {
 * 两者都由 web profile 提供。
 */
 function apply(ctx) {
-	ctx.inject(["settings", "webServer"], (sctx) => {
+	ctx.inject(["settings", "webServer", "tools"], (sctx) => {
 		const scope = sctx.settings.register(NAMESPACE, ConfigSchema);
+		const semantic = createSemanticRuntime(scope, sctx);
+		sctx.effect(() => () => { semantic.dispose().catch(() => {}); }, "database: query result cleanup");
+		const semanticService = Object.freeze({
+			version: semantic.version,
+			listDatasets(options = {}) {
+				const snapshot = semantic.getSnapshot({ includeFields: options.includeFields === true });
+				return snapshot.datasets;
+			},
+			getDatasetContext: semantic.getDatasetContext,
+			getTopologyContext: semantic.getTopologyContext,
+			findJoinPath: semantic.findJoinPath,
+			queryDataset: semantic.queryDataset,
+			getSnapshot: semantic.getSnapshot,
+			searchDatasetCatalog: semantic.searchDatasetCatalog,
+			searchDatasetFields: semantic.searchDatasetFields,
+			prepareTaskContext: semantic.prepareTaskContext
+		});
+		sctx.provide("databaseSemanticLayer", semanticService);
+		for (const tool of buildSemanticTools(semantic)) sctx.tools.register(tool);
 		const route = {
 			kind: "prefix",
 			path: API_PREFIX,
 			handler: async (req, res) => {
+				const controller = new AbortController();
+				const abort = () => controller.abort(new Error("数据库语义层请求已取消"));
+				req.once("aborted", abort);
 				try {
-					await dispatch(scope, req, res);
+					await dispatch(scope, semantic, req, res, controller.signal);
 				} catch (error) {
-					if (error instanceof ApiError) {
+					if (error instanceof ApiError || error instanceof SemanticApiError || error?.semanticInputError === true) {
 						sendJson(res, error.status, {
 							ok: false,
 							error: error.message
@@ -380,6 +411,8 @@ function apply(ctx) {
 						ok: false,
 						error: message
 					});
+				} finally {
+					req.off("aborted", abort);
 				}
 			}
 		};
@@ -387,7 +420,7 @@ function apply(ctx) {
 	});
 }
 /** 按 path + method 分发请求。 */
-async function dispatch(scope, req, res) {
+async function dispatch(scope, semantic, req, res, signal) {
 	const sub = new URL(req.url ?? "/", "http://x").pathname.slice(API_PREFIX.length).replace(/^\/+/, "");
 	const method = req.method ?? "GET";
 	if (method === "GET" && (sub === "" || sub === "list")) {
@@ -397,7 +430,15 @@ async function dispatch(scope, req, res) {
 		});
 		return;
 	}
+	if (method === "GET" && sub.startsWith("semantic/")) {
+		sendJson(res, 200, { ok: true, ...await dispatchSemantic(semantic, method, sub.slice("semantic/".length), {}, signal) });
+		return;
+	}
 	const body = await readJsonBody(req);
+	if (sub.startsWith("semantic/")) {
+		sendJson(res, 200, { ok: true, ...await dispatchSemantic(semantic, method, sub.slice("semantic/".length), body, signal) });
+		return;
+	}
 	if (method === "POST" && sub === "save") {
 		const input = readConnection(body["connection"] ?? body);
 		const connections = [...scope.get().connections];
@@ -406,6 +447,7 @@ async function dispatch(scope, req, res) {
 			const next = {
 				...input,
 				id: existing.id,
+				username: input.username.length > 0 ? input.username : existing.username,
 				password: input.password.length > 0 ? input.password : existing.password
 			};
 			connections[connections.indexOf(existing)] = next;
@@ -416,7 +458,7 @@ async function dispatch(scope, req, res) {
 			};
 			connections.push(next);
 		}
-		await scope.replace({ connections });
+		await scope.replace({ ...scope.get(), connections });
 		sendJson(res, 200, {
 			ok: true,
 			connections: connections.map(toView)
@@ -426,8 +468,9 @@ async function dispatch(scope, req, res) {
 	if (method === "POST" && sub === "delete") {
 		const id = body["id"];
 		if (typeof id !== "string" || id.length === 0) throw new ApiError(400, "缺少连接 id");
+		await semantic.deleteConnectionGuard(id);
 		const connections = scope.get().connections.filter((c) => c.id !== id);
-		await scope.replace({ connections });
+		await scope.replace({ ...scope.get(), connections });
 		sendJson(res, 200, {
 			ok: true,
 			connections: connections.map(toView)
@@ -449,7 +492,7 @@ async function dispatch(scope, req, res) {
 		const rawDocument = body["document"] ?? body;
 		const rawItems = readImportDocument(rawDocument);
 		const result = mergeImportedConnections(scope.get().connections, rawItems, readConflictPolicy(body["conflictPolicy"]));
-		await scope.replace({ connections: result.connections });
+		await scope.replace({ ...scope.get(), connections: result.connections });
 		sendJson(res, 200, {
 			ok: true,
 			connections: result.connections.map(toView),
@@ -491,6 +534,48 @@ async function dispatch(scope, req, res) {
 		return;
 	}
 	throw new ApiError(404, `未知接口：${method} ${sub}`);
+}
+
+/** 数据集、语义概念、关系拓扑、识别和语义查询接口。 */
+async function dispatchSemantic(semantic, method, sub, body, signal) {
+	if (method === "GET" && sub === "state") return { state: semantic.getState() };
+	if (method === "GET" && sub === "rules") return { rules: semantic.getRuleDefinition() };
+	if (method === "GET" && sub === "models") return { models: await semantic.listModels() };
+	if (method === "GET" && sub === "audit") return { auditLog: semantic.getAudit() };
+	if (method === "GET" && sub === "snapshot") return { snapshot: semantic.getSnapshot() };
+	if (method !== "POST") throw new SemanticApiError(404, `未知语义层接口：${method} ${sub}`);
+	if (sub === "context/catalog") return semantic.searchDatasetCatalog(body);
+	if (sub === "context/fields") return semantic.searchDatasetFields(body);
+	if (sub === "context/task") return { result: await semantic.prepareTaskContext(body) };
+	if (sub === "relations/plan-llm") return { plan: semantic.planRelationBatches(String(body["topologyId"] ?? ""), body) };
+	if (sub === "datasets/inspect") return { metadata: await semantic.inspectDataset(body, signal) };
+	if (sub === "datasets/save") return await semantic.saveDataset(body["dataset"] ?? body, signal);
+	if (sub === "datasets/sync") return await semantic.syncDataset(String(body["id"] ?? ""), signal);
+	if (sub === "datasets/delete") return await semantic.deleteDataset(String(body["id"] ?? ""), body["cascade"] === true);
+	if (sub === "concepts/save") return await semantic.saveConcept(body["concept"] ?? body);
+	if (sub === "concepts/delete") return await semantic.deleteConcept(String(body["id"] ?? ""));
+	if (sub === "topologies/save") return await semantic.saveTopology(body["topology"] ?? body);
+	if (sub === "topologies/delete") return await semantic.deleteTopology(String(body["id"] ?? ""));
+	if (sub === "relations/save") return await semantic.saveRelation(body["relation"] ?? body);
+	if (sub === "relations/confirm") return await semantic.confirmRelation(String(body["id"] ?? ""));
+	if (sub === "relations/reject") return await semantic.rejectRelation(String(body["id"] ?? ""));
+	if (sub === "relations/delete") return await semantic.deleteRelation(String(body["id"] ?? ""));
+	if (sub === "relations/identify-rules") return await semantic.identifyByRules(String(body["topologyId"] ?? ""), body["sampleValues"] === true, signal);
+	if (sub === "relations/identify-llm") return await semantic.identifyByLlm(String(body["topologyId"] ?? ""), body, signal);
+	if (sub === "model/save") return await semantic.saveModelConfig(body["modelConfig"] ?? body);
+	if (sub === "context/dataset") {
+		const context = semantic.getDatasetContext(String(body["id"] ?? body["datasetId"] ?? ""));
+		if (!context) throw new SemanticApiError(404, "数据集不存在或未启用");
+		return { context };
+	}
+	if (sub === "context/topology") {
+		const context = semantic.getTopologyContext(String(body["id"] ?? body["topologyId"] ?? ""));
+		if (!context) throw new SemanticApiError(404, "关系拓扑不存在或未启用");
+		return { context };
+	}
+	if (sub === "context/join-path") return { path: semantic.findJoinPath(String(body["fromDatasetId"] ?? ""), String(body["toDatasetId"] ?? ""), typeof body["topologyId"] === "string" ? body["topologyId"] : void 0) ?? [] };
+	if (sub === "query/dataset") return await semantic.queryDataset(String(body["datasetId"] ?? ""), body["request"] ?? body, signal);
+	throw new SemanticApiError(404, `未知语义层接口：${method} ${sub}`);
 }
 //#endregion
 export { apply };

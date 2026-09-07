@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+/database/lib/client.js.map
+# 历史或临时打包文件不自动纳入；当前发布包由 releases/ 管理。
+**/*.tgz
+!/releases/*.tgz

@@ -2,9 +2,9 @@
  * DSH 皮肤管理器 —— host 半部（纯 ESM，仅依赖 webServer）。
  *
  * 职责：
- * 1. 维护「皮肤目录」：内置皮肤（默认 / 黑神话·悟空）+ 已导入皮肤。
+ * 1. 维护「皮肤目录」：内置默认 / 黑神话·悟空 / 能碳章鱼 / 格创东智 + 已导入皮肤。
  * 2. 校验皮肤文件（什么样的 .dshskin 能被导入，见 validateSkin）。
- * 3. 持久化已导入皮肤与当前选中皮肤到 $DSH_HOME/profiles/skins/。
+ * 3. 持久化已导入皮肤与当前选中皮肤到插件安装目录同级的 skins/。
  * 4. 提供 /api/dsh-skins HTTP API（state / install / uninstall / select）。
  * 5. 提供内置资源路由（黑神话·悟空的视频背景）。
  *
@@ -25,12 +25,14 @@ import {
 } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { OCTACARBON_SKIN, OCTACARBON_ASSETS } from './octacarbon.js'
+import { GTRONTEC_SKIN, GTRONTEC_ASSETS } from './gtrontec.js'
 
 // 插件自身位置：.../profiles/node_modules/dsh-skin-manager/lib/index.js
 const LIB_DIR = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ROOT = join(LIB_DIR, '..')
 const VIDEO_PATH = join(PLUGIN_ROOT, 'assets', 'wukong-video.mp4')
-// 已导入皮肤的存储目录：.../profiles/skins/
+// 已导入皮肤的存储目录：.../profiles/node_modules/skins/
 const SKINS_DIR = join(LIB_DIR, '..', '..', 'skins')
 const INDEX_PATH = join(SKINS_DIR, 'index.json')
 
@@ -197,8 +199,8 @@ const BUILTIN_SKINS = Object.freeze([
     name: '默认皮肤',
     builtin: true,
     version: '1.0.0',
-    author: 'DeepSeek Harness',
-    description: 'DeepSeek Harness 原生外观，浅色/深色跟随系统与「外观」设置。',
+    author: '系统',
+    description: '系统原生外观，浅色/深色跟随系统与「外观」设置。',
     colorScheme: 'system',
     tokens: null,
     css: null,
@@ -209,13 +211,15 @@ const BUILTIN_SKINS = Object.freeze([
     name: '黑神话·悟空',
     builtin: true,
     version: '1.0.0',
-    author: 'DSH',
+    author: '社区皮肤',
     description: '黑金配色 + 毛玻璃金边 + 悟空官网视频底纹，参考《黑神话：悟空》。',
     colorScheme: 'dark',
     tokens: WUKONG_TOKENS,
     css: WUKONG_CSS,
     background: Object.freeze({ type: 'video', src: VIDEO_ROUTE, opacity: 0.26, brightness: 2 }),
   }),
+  OCTACARBON_SKIN,
+  GTRONTEC_SKIN,
 ])
 
 // ---------------------------------------------------------------------------
@@ -530,6 +534,28 @@ async function dispatch(req, res) {
 
 function apply(ctx) {
   ctx.inject(['webServer'], (httpCtx) => {
+    for (const [brand, assets] of [['octacarbon', OCTACARBON_ASSETS], ['gtrontec', GTRONTEC_ASSETS]]) {
+      for (const [file, contentType] of Object.entries(assets)) {
+        const assetPath = join(PLUGIN_ROOT, 'assets', brand, file)
+        httpCtx.effect(() => httpCtx.webServer.register({
+          kind: 'exact',
+          path: `/dsh-skin-manager/${brand}/${file}`,
+          handler: (req, res) => {
+            if (req.method !== 'GET' && req.method !== 'HEAD') {
+              res.writeHead(405, { Allow: 'GET, HEAD' }); res.end(); return
+            }
+            try {
+              const bytes = readFileSync(assetPath)
+              res.writeHead(200, {
+                'Content-Type': contentType, 'Content-Length': bytes.length,
+                'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff',
+              })
+              res.end(req.method === 'HEAD' ? undefined : bytes)
+            } catch { res.writeHead(404); res.end() }
+          },
+        }), `skin-manager: ${brand} ${file}`)
+      }
+    }
     // 内置视频资源路由（黑神话·悟空背景）。
     httpCtx.effect(() => httpCtx.webServer.register({
       kind: 'exact',
@@ -572,4 +598,4 @@ function apply(ctx) {
   })
 }
 
-export { apply, validateSkin, WUKONG_TOKENS, WUKONG_CSS }
+export { apply, validateSkin, WUKONG_TOKENS, WUKONG_CSS, BUILTIN_SKINS }

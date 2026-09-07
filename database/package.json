@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-database-connections",
-  "description": "Database connections plugin for DeepSeek Harness: manage MySQL and ClickHouse connections with CRUD, connection-name customization, connectivity testing, and read-only data queries from the Settings page",
-  "version": "1.0.0",
+  "description": "Database semantic layer plugin for DeepSeek Harness: manage MySQL and ClickHouse connections, datasets, business semantics, confirmed relation topologies, safe Agent queries, and explainable rule/LLM-assisted relation discovery",
+  "version": "2.1.0",
   "publishConfig": {
     "access": "public"
   },
@@ -22,11 +22,22 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/client.js",
+    "lib/**/*.js",
+    "src/client/dataset-source.mjs",
+    "src/client/dataset-validation.mjs",
+    "src/client/field-comment-copy.mjs",
+    "src/client/dataset-pagination.mjs",
     "lib/types/**/*.d.ts",
+    "tests/**/*.mjs",
+    "tests/support/**/*.cjs",
     "cordis.patch.yml",
-    "README.md"
+	"README.md",
+	"CHANGELOG.md",
+	"SOURCE-MANIFEST.md",
+    "数据库统一语义层插件-安装说明.md",
+    "数据库统一语义层插件-设计与识别规则说明.md",
+    "数据库统一语义层插件-验收报告.md",
+    "design-qa.md"
   ],
   "license": "MIT",
   "dsh": {
@@ -50,7 +61,14 @@
     "@deepseek-ai/schemastery": "^3.18.1",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.5",
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.5"
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.5"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/react": "~18.3.1",
@@ -62,10 +80,14 @@
     "@deepseek-ai/dsh-client-ui-settings-general": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.5",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.5"
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.5"
   },
   "scripts": {
-    "bundle": "tsdown",
-    "watch": "tsdown --watch"
+    "bundle": "node scripts/build-ui.mjs",
+    "bundle:ui": "node scripts/build-ui.mjs",
+    "watch": "tsdown --watch",
+    "test": "node --test tests/semantic-context-model.test.mjs tests/semantic-query.test.mjs tests/semantic-rules.test.mjs tests/dataset-source.test.mjs tests/dataset-validation.test.mjs tests/field-comment-copy.test.mjs tests/semantic-retrieval.test.mjs tests/semantic-pagination.test.mjs"
   }
 }

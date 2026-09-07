@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
     const EXPORT_FORMAT = "dsh-plugin-config";
     const EXPORT_FORMAT_VERSION = 1;
     const PLUGIN_ID = "@deepseek-ai/dsh-api-tools";
-    const PLUGIN_VERSION = "1.0.0";
+    const PLUGIN_VERSION = "1.0.1";
 
     function emptyDraft() {
       return {
@@ -680,9 +680,13 @@ window.__ModuleLoader__.load({
         setTestResult(null);
         setTestPassed(false);
         setMode("manual");
+        const notes = ["cURL 已解析"];
+        if (parsed.urlWasNormalized) notes.push("已为无协议地址补充 HTTPS");
+        if (parsed.preservedIntegerCount > 0) notes.push(`已保留 ${parsed.preservedIntegerCount} 个超长整数的精度`);
+        notes.push(parsed.bodyJsonWarning ? "Body 非 JSON，请手动检查参数" : "请检查参数和凭据引用");
         setMessage({
           kind: "ok",
-          text: parsed.bodyJsonWarning ? "cURL 已解析（Body 非 JSON，请手动检查参数）" : "cURL 已解析，请检查参数和凭据引用"
+          text: notes.join("；")
         });
       }, [curlInput, draft, onDraftChange]);
 
@@ -824,7 +828,13 @@ window.__ModuleLoader__.load({
     function sampleValue(p) {
       const dv = p.defaultValue;
       if (dv !== undefined && dv !== "") {
-        if (p.type === "number") { const n = Number(dv); return Number.isFinite(n) ? n : dv; }
+        if (p.type === "number") {
+          // 测试输入 JSON 先以字符串承载超长整数，host 会在真实请求体中恢复为
+          // 未加引号的 JSON 数字；不能先经过 Number，否则 19 位标识会被舍入。
+          if (isUnsafeIntegerLiteral(dv)) return String(dv).trim();
+          const n = Number(dv);
+          return Number.isFinite(n) ? n : dv;
+        }
         if (p.type === "boolean") return dv === true || dv === "true" || dv === "1";
         if (p.type === "object" || p.type === "array") { try { return JSON.parse(dv); } catch { return dv; } }
         return String(dv);
@@ -859,8 +869,89 @@ window.__ModuleLoader__.load({
       return JSON.stringify(sample, null, 2);
     }
 
+    const PRESERVED_INTEGER_KEY = "__dsh_curl_integer64_literal__";
+
+    function isIntegerLiteral(value) {
+      return typeof value === "string" && /^-?(?:0|[1-9][0-9]*)$/.test(value.trim());
+    }
+
+    function isUnsafeIntegerLiteral(value) {
+      if (!isIntegerLiteral(value)) return false;
+      try {
+        const integer = BigInt(value.trim());
+        return integer > BigInt(Number.MAX_SAFE_INTEGER) || integer < BigInt(Number.MIN_SAFE_INTEGER);
+      } catch {
+        return false;
+      }
+    }
+
+    function isPreservedInteger(value) {
+      return value !== null && typeof value === "object" && !Array.isArray(value)
+        && Object.keys(value).length === 1
+        && isIntegerLiteral(value[PRESERVED_INTEGER_KEY]);
+    }
+
+    /**
+     * JSON.parse 会在 reviver 运行前丢失 19 位整数精度。先扫描字符串外的数字，
+     * 把不安全整数替换为临时对象，再交给标准 JSON.parse 解析。
+     */
+    function parseJsonPreservingLargeIntegers(source) {
+      const text = String(source || "");
+      let output = "";
+      let count = 0;
+      let index = 0;
+      let inString = false;
+      let escaped = false;
+      while (index < text.length) {
+        const ch = text[index];
+        if (inString) {
+          output += ch;
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') inString = false;
+          index += 1;
+          continue;
+        }
+        if (ch === '"') {
+          inString = true;
+          output += ch;
+          index += 1;
+          continue;
+        }
+        if (ch === "-" || /[0-9]/.test(ch)) {
+          const match = text.slice(index).match(/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/);
+          if (match) {
+            const token = match[0];
+            if (isUnsafeIntegerLiteral(token)) {
+              output += JSON.stringify({ [PRESERVED_INTEGER_KEY]: token });
+              count += 1;
+            } else {
+              output += token;
+            }
+            index += token.length;
+            continue;
+          }
+        }
+        output += ch;
+        index += 1;
+      }
+      return { value: JSON.parse(output), preservedIntegerCount: count };
+    }
+
     /** 从 JSON 值递归生成参数（数组元素对象 / 对象字段）。 */
     function paramFromJson(name, value, location) {
+      if (isPreservedInteger(value)) {
+        return {
+          name,
+          location,
+          type: "number",
+          source: "agent",
+          required: true,
+          description: "超长整数（将按 JSON 数字原样发送）",
+          defaultValue: value[PRESERVED_INTEGER_KEY],
+          children: []
+        };
+      }
       if (Array.isArray(value)) {
         const elem = value.length > 0 ? value[0] : null;
         const children = (elem !== null && typeof elem === "object" && !Array.isArray(elem))
@@ -876,17 +967,44 @@ window.__ModuleLoader__.load({
       return { name, location, type: value === null ? "string" : typeof value, source: "agent", required: true, description: "请补充中文说明", defaultValue: dv, children: [] };
     }
 
+    function normalizeCurlSource(source) {
+      return String(source || "")
+        .replace(/\u00a0/g, " ")
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/\\+\s*\r?\n/g, " ")
+        .replace(/\\+\s+(?=--?)/g, " ")
+        .replace(/\\+(?=--?)/g, "");
+    }
+
+    function findCurlUrl(text) {
+      const absolute = text.match(/https?:\/\/[^\s'"]+/i);
+      if (absolute) return { url: absolute[0], normalized: false };
+      const schemeless = text.match(/(?:^|\s)(['"]?)((?:localhost|(?:[a-z0-9-]+\.)+[a-z0-9-]+)(?::[0-9]+)?\/[^\s'"]*)\1(?=\s|$)/i);
+      if (!schemeless) return null;
+      // 带认证信息的无协议地址优先补 HTTPS，避免令牌经明文 HTTP 发送。
+      return { url: `https://${schemeless[2]}`, normalized: true };
+    }
+
     /** 从 cURL 命令解析 method / url / auth / body 参数。 */
     function parseCurlCommand(source) {
-      const text = String(source || "").trim();
-      if (!/^curl\s/i.test(text)) return { error: "请输入有效的 cURL 命令" };
+      const text = normalizeCurlSource(source).trim();
+      if (!/^curl(?:\.exe)?\s/i.test(text)) return { error: "请输入有效的 cURL 命令" };
       const methodMatch = text.match(/(?:-X|--request)\s+([A-Z]+)/i);
       const hasData = /(?:-d|--data(?:-raw)?)\s+/.test(text);
       let method = (methodMatch ? methodMatch[1] : (hasData ? "POST" : "GET")).toUpperCase();
       if (!METHODS.includes(method)) method = "GET";
-      const urlMatch = text.match(/https?:\/\/[^\s'"]+/i);
+      const urlMatch = findCurlUrl(text);
       if (!urlMatch) return { error: "没有识别到接口地址" };
-      const parsed = { method, url: urlMatch[0], auth: "none", credential: "", params: [] };
+      const parsed = {
+        method,
+        url: urlMatch.url,
+        urlWasNormalized: urlMatch.normalized,
+        auth: "none",
+        credential: "",
+        params: [],
+        preservedIntegerCount: 0
+      };
       const authMatch = text.match(/Authorization:\s*Bearer\s+([^'"\s]+)/i);
       if (authMatch) {
         parsed.auth = "bearer";
@@ -895,7 +1013,9 @@ window.__ModuleLoader__.load({
       const dataMatch = text.match(/(?:-d|--data(?:-raw)?)\s+(['"])([\s\S]*?)\1/i);
       if (dataMatch) {
         try {
-          const body = JSON.parse(dataMatch[2]);
+          const decoded = parseJsonPreservingLargeIntegers(dataMatch[2]);
+          const body = decoded.value;
+          parsed.preservedIntegerCount = decoded.preservedIntegerCount;
           parsed.params = Object.entries(body).map(([name, value]) => paramFromJson(name, value, "body"));
         } catch {
           parsed.bodyJsonWarning = true;

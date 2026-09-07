@@ -19,11 +19,11 @@
 
 import { randomUUID } from "node:crypto";
 import z from "@deepseek-ai/schemastery";
-import { settingsNamespace } from "@deepseek-ai/dsh-settings";
+
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
 
-const NAMESPACE = settingsNamespace("api-tools");
+const NAMESPACE = "api-tools";
 const API_PREFIX = "/api/api-tools";
 const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 默认 10 MB
 const MAX_RESPONSE_BYTES_LIMIT = 50 * 1024 * 1024; // 上限 50 MB
@@ -33,7 +33,7 @@ const MAX_IMPORT_ITEMS = 500;
 const EXPORT_FORMAT = "dsh-plugin-config";
 const EXPORT_FORMAT_VERSION = 1;
 const PLUGIN_ID = "@deepseek-ai/dsh-api-tools";
-const PLUGIN_VERSION = "1.0.0";
+const PLUGIN_VERSION = "1.0.2";
 
 /** 参数位置白名单。 */
 const PARAM_LOCATIONS = ["path", "query", "header", "body"];
@@ -186,6 +186,16 @@ function toParamSchema(p) {
   const required = p.required ? { required: true } : {};
   switch (p.type) {
     case "number":
+      // JSON/JavaScript 无法精确表示超过 2^53-1 的整数。若默认值已经表明这是
+      // 64 位标识，则让 Agent 以字符串传入，发请求时再按原始 JSON 数字输出。
+      if (isUnsafeIntegerLiteral(p.defaultValue)) {
+        return {
+          ...base,
+          description: `${base.description}（超长整数，请按字符串原样传入）`,
+          type: "string",
+          ...required
+        };
+      }
       return { ...base, type: "number", ...required };
     case "boolean":
       return { ...base, type: "boolean", ...required };
@@ -225,13 +235,43 @@ function buildDescription(api) {
 }
 
 /** 把「非 agent 来源」的字符串值按类型转换。 */
-function coerceValue(raw, type) {
+function isIntegerLiteral(raw) {
+  return typeof raw === "string" && /^-?(?:0|[1-9][0-9]*)$/.test(raw.trim());
+}
+
+/** 判断十进制整数字符串是否超出 JavaScript 安全整数范围。 */
+function isUnsafeIntegerLiteral(raw) {
+  if (!isIntegerLiteral(raw)) return false;
+  try {
+    const value = BigInt(raw.trim());
+    return value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER);
+  } catch {
+    return false;
+  }
+}
+
+/** 把普通数字或精确的超长整数字符串转换为请求阶段使用的值。 */
+function coerceNumberValue(raw, name) {
+  if (typeof raw === "bigint") return raw;
+  if (typeof raw === "number") {
+    if (Number.isInteger(raw) && !Number.isSafeInteger(raw)) {
+      throw new ApiError(400, `参数 ${name || "数字"} 已超出 JavaScript 安全整数范围且精度已经丢失，请用引号包裹该值后重试`);
+    }
+    return Number.isFinite(raw) ? raw : String(raw);
+  }
+  if (isIntegerLiteral(raw)) {
+    const text = raw.trim();
+    if (isUnsafeIntegerLiteral(text)) return BigInt(text);
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : String(raw);
+}
+
+function coerceValue(raw, type, name = "") {
   if (raw === undefined || raw === null) return raw;
   switch (type) {
-    case "number": {
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : String(raw);
-    }
+    case "number":
+      return coerceNumberValue(raw, name);
     case "boolean":
       return raw === true || raw === "true" || raw === "1";
     case "object":
@@ -249,6 +289,34 @@ function coerceValue(raw, type) {
   }
 }
 
+/** 按参数子字段递归转换结构化值，避免嵌套的超长整数再次被普通 Number 舍入。 */
+function coerceParamValue(p, raw) {
+  if (raw === undefined || raw === null) return raw;
+  if (p.type === "object" && typeof raw === "object" && !Array.isArray(raw)) {
+    const result = { ...raw };
+    for (const child of p.children ?? []) {
+      if (Object.prototype.hasOwnProperty.call(result, child.name)) {
+        result[child.name] = coerceParamValue(child, result[child.name]);
+      }
+    }
+    return result;
+  }
+  if (p.type === "array" && Array.isArray(raw)) {
+    if (!p.children || p.children.length === 0) return raw;
+    return raw.map((item) => {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
+      const result = { ...item };
+      for (const child of p.children) {
+        if (Object.prototype.hasOwnProperty.call(result, child.name)) {
+          result[child.name] = coerceParamValue(child, result[child.name]);
+        }
+      }
+      return result;
+    });
+  }
+  return coerceValue(raw, p.type, p.name);
+}
+
 /** 校验并品牌化凭据引用名；格式错误抛友好 ApiError。 */
 function assertCredentialRef(name) {
   try {
@@ -263,22 +331,56 @@ async function resolveParamValue(p, args, sctx) {
   switch (p.source) {
     case "agent": {
       const v = args === undefined || args === null ? undefined : args[p.name];
-      if (v !== undefined && v !== null && v !== "") return coerceValue(v, p.type);
+      if (v !== undefined && v !== null && v !== "") return coerceParamValue(p, v);
       // Agent 未提供该字段时，回退到默认值。
-      return p.defaultValue === "" ? undefined : coerceValue(p.defaultValue, p.type);
+      return p.defaultValue === "" ? undefined : coerceParamValue(p, p.defaultValue);
     }
     case "fixed":
-      return coerceValue(p.defaultValue, p.type);
+      return coerceParamValue(p, p.defaultValue);
     case "credential": {
       if (!p.defaultValue) return undefined;
       const resolved = await sctx.credentials.resolve(assertCredentialRef(p.defaultValue));
-      return resolved === undefined ? undefined : coerceValue(resolved.value, p.type);
+      return resolved === undefined ? undefined : coerceParamValue(p, resolved.value);
     }
     case "default":
-      return p.defaultValue === "" ? undefined : coerceValue(p.defaultValue, p.type);
+      return p.defaultValue === "" ? undefined : coerceParamValue(p, p.defaultValue);
     default:
       return undefined;
   }
+}
+
+/**
+ * JSON.stringify 不能序列化 BigInt。本函数仅对 BigInt 输出未加引号的十进制字面量，
+ * 其余 JSON 值遵循标准序列化规则，从而保留后端 Long/Int64 标识的每一位。
+ */
+function stringifyJsonBody(value) {
+  const stack = new Set();
+  const serialize = (current, inArray = false) => {
+    if (typeof current === "bigint") return current.toString();
+    if (current === null) return "null";
+    if (typeof current === "string" || typeof current === "boolean") return JSON.stringify(current);
+    if (typeof current === "number") return Number.isFinite(current) ? JSON.stringify(current) : "null";
+    if (current === undefined || typeof current === "function" || typeof current === "symbol") {
+      return inArray ? "null" : undefined;
+    }
+    if (typeof current !== "object") return JSON.stringify(current);
+    if (stack.has(current)) throw new ApiError(400, "请求体包含循环引用，无法序列化为 JSON");
+    stack.add(current);
+    try {
+      if (Array.isArray(current)) {
+        return `[${current.map((item) => serialize(item, true) ?? "null").join(",")}]`;
+      }
+      const pairs = [];
+      for (const [key, item] of Object.entries(current)) {
+        const encoded = serialize(item, false);
+        if (encoded !== undefined) pairs.push(`${JSON.stringify(key)}:${encoded}`);
+      }
+      return `{${pairs.join(",")}}`;
+    } finally {
+      stack.delete(current);
+    }
+  };
+  return serialize(value);
 }
 
 /** 为一次调用解析认证头。 */
@@ -305,7 +407,7 @@ async function applyAuth(api, headers, sctx) {
 }
 
 /** 带超时与外部取消信号的 fetch。 */
-async function fetchWithTimeout(url, init, signal, timeoutMs) {
+async function fetchWithTimeout(url, init, signal, timeoutMs, consume) {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (signal) {
@@ -314,7 +416,9 @@ async function fetchWithTimeout(url, init, signal, timeoutMs) {
   }
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    // Keep timeout and caller cancellation active until the response body is consumed.
+    return await consume(response);
   } finally {
     clearTimeout(timer);
     if (signal) signal.removeEventListener("abort", onAbort);
@@ -365,19 +469,17 @@ async function callApi(api, args, sctx, signal, timeoutMs = DEFAULT_TIMEOUT_MS) 
   const hasBody = Object.keys(bodyValues).length > 0;
   let body;
   if (hasBody) {
-    body = JSON.stringify(bodyValues);
+    body = stringifyJsonBody(bodyValues);
     headers["Content-Type"] = headers["Content-Type"] ?? "application/json";
   }
 
-  const response = await fetchWithTimeout(
+  const { response, text } = await fetchWithTimeout(
     url.toString(),
     { method: api.method, headers, body },
     signal,
-    timeoutMs
+    timeoutMs,
+    async (response) => ({ response, text: await readBounded(response, clampMaxResponse(api.maxResponseBytes)) })
   );
-
-  const maxBytes = clampMaxResponse(api.maxResponseBytes);
-  const text = await readBounded(response, maxBytes);
   let data;
   try {
     data = JSON.parse(text);
@@ -388,8 +490,7 @@ async function callApi(api, args, sctx, signal, timeoutMs = DEFAULT_TIMEOUT_MS) 
     ok: response.ok,
     status: response.status,
     statusText: response.statusText,
-    data: response.ok ? data : undefined,
-    error: response.ok ? undefined : data,
+    ...(response.ok ? { data } : { error: data }),
     ms: Date.now() - startedAt
   };
 }
@@ -398,13 +499,28 @@ async function callApi(api, args, sctx, signal, timeoutMs = DEFAULT_TIMEOUT_MS) 
 async function readBounded(response, maxBytes = DEFAULT_MAX_RESPONSE_BYTES) {
   const contentLength = Number(response.headers.get("content-length") ?? "0");
   if (contentLength > maxBytes) {
+    await response.body?.cancel();
     throw new ApiError(502, `响应过大（${contentLength} 字节），超过 ${maxBytes} 字节上限`);
   }
-  const buf = await response.arrayBuffer();
-  if (buf.byteLength > maxBytes) {
-    throw new ApiError(502, `响应过大（${buf.byteLength} 字节），超过 ${maxBytes} 字节上限`);
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel();
+        throw new ApiError(502, `响应过大（${bytes} 字节），超过 ${maxBytes} 字节上限`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, bytes).toString("utf8");
+  } finally {
+    reader.releaseLock();
   }
-  return Buffer.from(buf).toString("utf8");
 }
 
 /** 把一个 API 配置编译成 defineTool 定义。 */
@@ -776,3 +892,4 @@ function apply(ctx) {
 }
 
 export { apply };
+

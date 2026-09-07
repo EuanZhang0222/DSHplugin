@@ -1,5 +1,8 @@
 # DSH 插件生态（DSH-plugin）
 
+> **当前安装入口（2026-09-07）**：[安装、升级与验收](INSTALL.md) · [给智能体的执行要求](AGENTS.md) · [当前发布包](releases/) · [发布清单与校验值](releases/manifest.json) · [本次同步说明](SYNC-2026-09-07.md)。
+> 已核对正式部署：我的插件 1.0.0、技能 1.0.0、皮肤 1.2.0、API（接口）1.0.2、数据库 2.1.0。请使用 releases（发布目录）中的当前包。
+
 本仓库包含一组 DeepSeek Harness（DSH）Web 界面的扩展插件，统一以「npm 包 + `cordis.patch.yml`」的方式安装到 `web` profile，在侧栏底部提供设置与扩展能力。
 
 ## 一、插件清单
@@ -10,9 +13,9 @@
 | `dsh-skill-manager` | `dsh-skill-manager` | 业务插件 | 自定义技能（正文 + Python 脚本 + 能力引用） |
 | `dsh-skin-manager` | `dsh-skin-manager` | 业务插件 | 皮肤/主题切换（颜色令牌 + 自定义 CSS + 背景） |
 | `dsh-api-tools` | `@deepseek-ai/dsh-api-tools` | 业务插件 | 把第三方 HTTP API 配置成 Agent 工具，支持选择性导入导出 |
-| `database` | `@deepseek-ai/dsh-database-connections` | 业务插件 | MySQL / ClickHouse 连接管理、只读查询及选择性导入导出 |
+| `database` | `@deepseek-ai/dsh-database-connections` | 业务插件 | MySQL / ClickHouse 连接、数据集、统一语义、多个关系拓扑、受控 Agent 查询及选择性导入导出 |
 
-> 每个子目录都自带 `package.json`、`cordis.patch.yml`、安装脚本（`install.ps1` / `install.sh`）与安装说明；`*.tgz` 是打包产物，可用 `dsh plugin --profile web add <tgz>` 安装。
+> 每个子目录都自带 `package.json`、`cordis.patch.yml` 和安装说明；`*.tgz` 是打包产物，可用 `dsh plugin --profile web add <tgz>` 安装。部分插件另带 `install.ps1` / `install.sh` 安装脚本。
 
 ## 二、核心设计：两个「页面容器」slot
 
@@ -36,7 +39,7 @@ API 调用和数据库连接插件都使用统一的 `dsh-plugin-config`（DSH �
 - 目标环境必须安装相同插件，导入时会校验插件标识和格式版本；
 - 冲突可选择跳过、覆盖或创建副本，所有条目先整体校验再写入；
 - API 配置只迁移凭据引用名，真实接口密钥不会进入文件；
-- 数据库配置不迁移密码，导入后须在目标环境补填并重新测试连接。
+- 数据库配置不迁移用户名和密码，导入后须在目标环境补填并重新测试连接；数据集和拓扑等语义资产由数据库插件自身设置持久化。
 
 ## 四、【我的插件】与其他插件的关联关系（重点）
 
@@ -146,17 +149,5 @@ const cardGridStyle = {
 
 ## 七、安装
 
-各插件独立安装，推荐顺序（非强制）：
+完整命令、前置条件、旧手工安装迁移、升级备份和验证步骤统一维护在 [INSTALL.md（安装指南）](INSTALL.md)。请下载 releases（发布目录）的五个当前包并按清单校验后安装；各子目录历史包不代表当前正式版本。
 
-```bash
-# 基础插件（可选，装了才有「我的插件」大面板）
-dsh plugin --profile web add ./dsh-my-plugins/dsh-my-plugins-1.0.0.tgz
-
-# 业务插件
-dsh plugin --profile web add ./dsh-skill-manager/dsh-skill-manager-1.0.0.tgz
-dsh plugin --profile web add ./dsh-skin-manager/dsh-skin-manager-1.0.0.tgz
-dsh plugin --profile web add ./dsh-api-tools/deepseek-ai-dsh-api-tools-1.0.0.tgz
-dsh plugin --profile web add ./database/deepseek-ai-dsh-database-connections-1.0.0.tgz
-```
-
-也可进入各目录运行 `install.ps1`（Windows）/ `install.sh`（macOS/Linux）走 `cordis.patch.yml insert` 方式。安装后重启 `dsh web` 生效。
