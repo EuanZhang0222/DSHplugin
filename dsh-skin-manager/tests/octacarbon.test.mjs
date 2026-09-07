@@ -71,6 +71,7 @@ test('资源路由固定路径，支持 GET/HEAD，拒绝写操作', () => {
 })
 for (const brandId of ['octacarbon', 'gtrontec']) {
 const productName = brandId === 'gtrontec' ? 'Gtrontec Harness' : 'OCTACARBON Harness'
+const welcomeText = brandId === 'gtrontec' ? '欢迎使用能碳大脑' : '欢迎使用章鱼AI能碳大脑'
 test(`${brandId} 底纹在正文下方，不捕获鼠标，不在全页浮层上绘制`, () => {
   const css = BUILTIN_SKINS.find(s => s.id === brandId).css
   assert.match(css, /background-image: linear-gradient/)
@@ -86,7 +87,7 @@ test(`${brandId} 品牌插槽、欢迎语、标签页图标同步启用，撤销
   assert.equal(r.entries.size, 4)
   assert.ok([...r.entries.values()].every(e => e.options.priority === -1000))
   assert.equal(r.document.title, productName)
-  assert.equal(r.document.querySelector('[class*=headlineText]').textContent, '欢迎使用能碳大脑')
+  assert.equal(r.document.querySelector('[class*=headlineText]').textContent, welcomeText)
   assert.ok(r.document.querySelector('link').href.endsWith(`${brandId}/favicon.svg`))
   off(); await tick()
   assert.equal(r.document.title, 'DeepSeek Harness')
@@ -103,7 +104,7 @@ test(`${brandId} 语言和会话变化后持续替换，保留真实消息与模
   el.firstChild.nodeValue = 'Explore the unknown'
   r.document.title = '测试会话 — DSH Local Build'
   await tick()
-  assert.equal(el.textContent, '欢迎使用能碳大脑')
+  assert.equal(el.textContent, welcomeText)
   assert.equal(r.document.title, '测试会话 — ' + productName)
   assert.equal(r.document.getElementById('message').textContent, 'DeepSeek Harness DSH 探索未知之境')
   assert.equal(r.document.querySelector('textarea').value, 'DSH')
@@ -116,7 +117,7 @@ test(`${brandId} 新增欢迎节点和反复启停均无残留`, async () => {
     const off = r.api.applyBrand(r.ctx, r.api.BRANDS[brandId])
     const span = r.document.createElement('span'); span.className = 'headlineText_new'; span.textContent = '探索未知之境'
     r.document.querySelector('[data-phase]').append(span)
-    await tick(); assert.equal(span.textContent, '欢迎使用能碳大脑')
+    await tick(); assert.equal(span.textContent, welcomeText)
     off(); assert.equal(span.textContent, '探索未知之境'); span.remove()
     assert.equal(r.entries.size, 0)
   }
@@ -151,6 +152,7 @@ test('管理器反复切换释放品牌和颜色覆盖，晚到响应不会复�
     await manager.select(id); await tick()
     assert.equal(r.entries.size, 4); assert.equal(r.tokens.size, 1)
     assert.equal(r.document.title, title)
+    assert.equal(r.document.querySelector('[class*=headlineText]').textContent, id === 'octacarbon' ? '欢迎使用章鱼AI能碳大脑' : '欢迎使用能碳大脑')
     assert.equal(r.document.documentElement.hasAttribute('data-' + id), true)
     assert.equal(r.document.documentElement.hasAttribute('data-' + (id === 'gtrontec' ? 'octacarbon' : 'gtrontec')), false)
     assert.ok(r.document.querySelector('link').href.endsWith(id + '/favicon.svg'))

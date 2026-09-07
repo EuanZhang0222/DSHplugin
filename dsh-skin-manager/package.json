@@ -1,6 +1,6 @@
 {
   "name": "dsh-skin-manager",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "皮肤管理器：内置格创东智、能碳章鱼、默认与黑神话·悟空皮肤，支持品牌替换、皮肤导入/校验/切换/卸载",
   "type": "module",
   "main": "lib/index.js",

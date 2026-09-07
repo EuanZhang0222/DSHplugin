@@ -9,7 +9,6 @@ window.__ModuleLoader__.load({
 
     const OCTACARBON_ASSET = "/dsh-skin-manager/octacarbon/";
     const PRODUCT_NAME = "OCTACARBON Harness";
-    const WELCOME_TEXT = "欢迎使用能碳大脑";
 
     // 标识使用原始 PNG 的第一个章鱼字母 O，通过 SVG 视窗展示，不改原图像素。
     function OctacarbonMark({ size = 24, className = "" }) {
@@ -44,8 +43,10 @@ window.__ModuleLoader__.load({
     // 品牌行为只能由本插件内置配置触发；导入皮肤仍只接受颜色、样式和背景。
     const BRANDS = Object.freeze({
       octacarbon: { id: "octacarbon", productName: PRODUCT_NAME, asset: OCTACARBON_ASSET,
+        welcomeText: "欢迎使用章鱼AI能碳大脑",
         Mark: OctacarbonMark, Name: OctacarbonName, preview: "logo-combined.png", alt: "能碳章鱼品牌标识" },
       gtrontec: { id: "gtrontec", productName: "Gtrontec Harness", asset: "/dsh-skin-manager/gtrontec/",
+        welcomeText: "欢迎使用能碳大脑",
         Mark: GtrontecMark, Name: GtrontecName, preview: "logo-zh.png", alt: "格创东智品牌标识" },
     });
 
@@ -55,7 +56,7 @@ window.__ModuleLoader__.load({
       return React.createElement("div", {
         style: { display: "flex", alignItems: "center", gap: 12, padding: 12, marginBottom: 12, borderRadius: 8, background: "#f0f4ff", color: "#17254b" },
       }, React.createElement("img", { src: brand.asset + brand.preview, alt: brand.alt, style: { width: 130, maxWidth: "45%", height: "auto" } }),
-      React.createElement("span", { style: { fontSize: 12, lineHeight: 1.6 } }, WELCOME_TEXT));
+      React.createElement("span", { style: { fontSize: 12, lineHeight: 1.6 } }, brand.welcomeText));
     }
 
     // 仅取消产品预览声明步骤；不跳过模型配置、访问权限或任何确认步骤。
@@ -73,6 +74,7 @@ window.__ModuleLoader__.load({
     }
 
     function applyBrand(ctx, brand) {
+      const welcomeText = brand.welcomeText;
       const root = document.documentElement;
       const attribute = "data-" + brand.id;
       const favicon = brand.asset + "favicon.svg";
@@ -114,9 +116,9 @@ window.__ModuleLoader__.load({
           if (el.closest('[contenteditable="true"], textarea, pre, code')) continue;
           const node = el.firstChild;
           if (!node || node.nodeType !== 3 || el.childNodes.length !== 1) continue;
-          if (node.nodeValue !== WELCOME_TEXT) {
+          if (node.nodeValue !== welcomeText) {
             textChanges.set(node, node.nodeValue);
-            node.nodeValue = WELCOME_TEXT;
+            node.nodeValue = welcomeText;
           }
         }
         for (const node of textChanges.keys()) if (!node.isConnected) textChanges.delete(node);
@@ -156,7 +158,7 @@ window.__ModuleLoader__.load({
         stopped = true;
         bodyObserver.disconnect(); titleObserver.disconnect();
         for (const dispose of disposers.reverse()) dispose();
-        for (const [node, original] of textChanges) if (node.isConnected && node.nodeValue === WELCOME_TEXT) node.nodeValue = original;
+        for (const [node, original] of textChanges) if (node.isConnected && node.nodeValue === welcomeText) node.nodeValue = original;
         textChanges.clear();
         if (document.title === writtenTitle) document.title = originalTitle;
         for (const [el, href, type] of iconChanges) {

@@ -24,10 +24,10 @@
     {
       "directory": "dsh-skin-manager",
       "name": "dsh-skin-manager",
-      "version": "1.2.0",
-      "file": "dsh-skin-manager-1.2.0.tgz",
-      "sha256": "149b95067bfca26ccf8f93c06bb3e4dfdb7e20de300d6dd7c7c3bcc000ffec7a",
-      "size": 1237239,
+      "version": "1.2.1",
+      "file": "dsh-skin-manager-1.2.1.tgz",
+      "sha256": "415c2457766e0882e7c87c4cd06b5e4213e16bdfcd40d63a4bc7d7140965153a",
+      "size": 1237260,
       "files": 19
     },
     {

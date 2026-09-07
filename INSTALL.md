@@ -12,7 +12,7 @@
 |---|---|---|
 | 我的插件（聚合面板） | 1.0.0 | dsh-my-plugins-1.0.0.tgz |
 | 技能管理器 | 1.0.0 | dsh-skill-manager-1.0.0.tgz |
-| 皮肤管理器 | 1.2.0 | dsh-skin-manager-1.2.0.tgz |
+| 皮肤管理器 | 1.2.1 | dsh-skin-manager-1.2.1.tgz |
 | API 调用（接口工具） | 1.0.2 | deepseek-ai-dsh-api-tools-1.0.2.tgz |
 | 数据库统一语义层 | 2.1.0 | deepseek-ai-dsh-database-connections-2.1.0.tgz |
 
@@ -73,7 +73,7 @@ release_root="$PWD/releases"
 for package in \
   dsh-my-plugins-1.0.0.tgz \
   dsh-skill-manager-1.0.0.tgz \
-  dsh-skin-manager-1.2.0.tgz \
+  dsh-skin-manager-1.2.1.tgz \
   deepseek-ai-dsh-api-tools-1.0.2.tgz \
   deepseek-ai-dsh-database-connections-2.1.0.tgz
 do
